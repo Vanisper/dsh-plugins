@@ -61,8 +61,10 @@ function projectNameFromTarget(target: string): string {
  *
  * @param root 壳根规范路径
  * @param target git URL 或本机目录路径
+ * @param options 挂载选项
  * @param options.name 壳内目录名（projects/<name>），缺省从 target 推断
  * @param options.title 显示名，写入 space.yaml；缺省时显示端以目录名兜底
+ * @param execGit git 执行器，测试中可注入替身
  * @throws {SpaceOpError} 目标已存在、clone 失败或本机目录无效
  */
 export async function mountProject(

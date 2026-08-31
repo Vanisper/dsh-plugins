@@ -1,11 +1,12 @@
 // @env node
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import type { SpaceEntity } from './types.ts'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { canonicalize } from './locate.ts'
-import { initSpace, mountProject } from './ops.ts'
+import { attachFolder, createSpace, setPrimary } from './ops.ts'
+import { canonicalize } from './resolve.ts'
 import { registerOneSpace } from './workspaces.ts'
 
 /** 仿真核心 registry 的两个关键行为：create 前置新记录、同路径重复登记返回既有项 */
@@ -35,87 +36,58 @@ class FakeRegistry {
   }
 }
 
-let shell: string
-let outside: string
+let dirA: string
+let dirB: string
 
 beforeEach(async () => {
-  shell = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-ws-shell-'))))!
-  outside = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-ws-out-'))))!
+  dirA = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-ws-a-'))))!
+  dirB = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-ws-b-'))))!
 })
 
 afterEach(async () => {
-  await rm(shell, { recursive: true, force: true })
-  await rm(outside, { recursive: true, force: true })
+  for (const dir of [dirA, dirB])
+    await rm(dir, { recursive: true, force: true })
 })
 
-function pathOf(ws: FakeRegistry, id: string): string {
-  return ws.records.get(id)!.path
-}
-
 describe('registerOneSpace', () => {
-  it('登记壳根与成员，成员按 space.yaml 顺序排在壳根之后、既有工作区之前', async () => {
-    await initSpace(shell, '空间甲')
-    await mountProject(shell, outside, { name: 'ext' })
-    const innerReal = join(shell, 'projects', 'inner')
-    await mkdir(innerReal, { recursive: true })
-    // 手工补一个壳内成员（真实子目录）
-    const { loadSpaceFile, saveSpaceFile } = await import('./space-file.ts')
-    const file = await loadSpaceFile(shell)
-    file.projects.push({ path: 'projects/inner', title: '内核' })
-    await saveSpaceFile(shell, file)
+  it('主成员排首位，整块相邻，title 显式传入', async () => {
+    let data: SpaceEntity[] = []
+    data = (await createSpace(data, 's', dirA)).data
+    data = (await attachFolder(data, 's', dirB, { title: 'B 服务' })).data
+    // 把 B 设为主成员：登记时它应排在最前
+    const { data: d2 } = await setPrimary(data, 's', 'B 服务')
 
     const ws = new FakeRegistry()
     const existing = await ws.create('/preexisting/dir')
-    await registerOneSpace(ws as unknown as WorkspaceRegistry, shell, () => {})
+    await registerOneSpace(ws as unknown as WorkspaceRegistry, d2[0]!, () => {})
 
-    const paths = ws.order.map(id => pathOf(ws, id))
-    expect(paths).toEqual([shell, outside, innerReal, '/preexisting/dir'])
-    // title：壳根取空间名；成员取 space.yaml title 或壳内目录名（而非 realpath 名）
-    expect(ws.records.get(ws.order[0]!)!.title).toBe('空间甲')
-    expect(ws.records.get(ws.order[1]!)!.title).toBe('ext')
-    expect(ws.records.get(ws.order[2]!)!.title).toBe('内核')
-    expect(existing.id).toBe(ws.order[3]!)
+    const paths = ws.order.map(id => ws.records.get(id)!.path)
+    expect(paths).toEqual([dirB, dirA, '/preexisting/dir'])
+    expect(ws.records.get(ws.order[0]!)!.title).toBe('B 服务')
+    expect(ws.records.get(ws.order[1]!)!.title).toBe(dirA.split('/').pop())
+    expect(existing.id).toBe(ws.order[2]!)
   })
 
   it('成员目录缺失只跳过不报错', async () => {
-    await initSpace(shell)
-    const { loadSpaceFile, saveSpaceFile } = await import('./space-file.ts')
-    const file = await loadSpaceFile(shell)
-    file.projects.push({ path: 'projects/ghost' })
-    await saveSpaceFile(shell, file)
+    const { data: created } = await createSpace([], 's', dirA)
+    const { data } = await attachFolder(created, 's', dirB)
+    await rm(dirB, { recursive: true, force: true })
 
     const logs: string[] = []
     const ws = new FakeRegistry()
-    await registerOneSpace(ws as unknown as WorkspaceRegistry, shell, m => logs.push(m))
-    expect(ws.order.map(id => pathOf(ws, id))).toEqual([shell])
-    expect(logs.some(line => line.includes('projects/ghost'))).toBe(true)
+    await registerOneSpace(ws as unknown as WorkspaceRegistry, data[0]!, m => logs.push(m))
+    expect(ws.order.map(id => ws.records.get(id)!.path)).toEqual([dirA])
+    expect(logs.some(line => line.includes(dirB))).toBe(true)
   })
 
   it('重复登记返回既有项且不改动既有标题', async () => {
-    await initSpace(shell, '空间甲')
+    const { data } = await createSpace([], 's', dirA)
     const ws = new FakeRegistry()
-    await registerOneSpace(ws as unknown as WorkspaceRegistry, shell, () => {})
+    await registerOneSpace(ws as unknown as WorkspaceRegistry, data[0]!, () => {})
     // 用户在 UI 里改了标题（既有 workspace 的 title 不被覆盖）
     ws.records.get(ws.order[0]!)!.title = '用户改的名'
-    await registerOneSpace(ws as unknown as WorkspaceRegistry, shell, () => {})
+    await registerOneSpace(ws as unknown as WorkspaceRegistry, data[0]!, () => {})
     expect(ws.records.size).toBe(1)
     expect(ws.records.get(ws.order[0]!)!.title).toBe('用户改的名')
-  })
-
-  it('symlink 成员按 realpath 登记，title 仍用壳内目录名', async () => {
-    await initSpace(shell)
-    const realTarget = join(outside, 'real-target')
-    await mkdir(realTarget, { recursive: true })
-    await symlink(realTarget, join(shell, 'projects', 'alias'), 'dir')
-    const { loadSpaceFile, saveSpaceFile } = await import('./space-file.ts')
-    const file = await loadSpaceFile(shell)
-    file.projects.push({ path: 'projects/alias' })
-    await saveSpaceFile(shell, file)
-
-    const ws = new FakeRegistry()
-    await registerOneSpace(ws as unknown as WorkspaceRegistry, shell, () => {})
-    expect(pathOf(ws, ws.order[0]!)).toBe(shell)
-    expect(pathOf(ws, ws.order[1]!)).toBe(realTarget)
-    expect(ws.records.get(ws.order[1]!)!.title).toBe('alias')
   })
 })

@@ -1,182 +1,153 @@
 // @env node
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { canonicalize } from './locate.ts'
-import { doctorSpace, initSpace, listSpace, mountProject, setProjectDesc, unmountProject } from './ops.ts'
+import { attachFolder, createSpace, detachFolder, doctorSpace, findSpace, setFolderDesc, setFolderTitle, setPrimary } from './ops.ts'
+import { canonicalize } from './resolve.ts'
 
-let shell: string
-let outside: string
+let dirA: string
+let dirB: string
+let dirC: string
 
 beforeEach(async () => {
-  shell = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-shell-'))))!
-  outside = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-outside-'))))!
+  // tmpdir 必然存在，canonicalize 不会返回 undefined
+  dirA = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-a-'))))!
+  dirB = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-b-'))))!
+  dirC = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-c-'))))!
 })
 
 afterEach(async () => {
-  await rm(shell, { recursive: true, force: true })
-  await rm(outside, { recursive: true, force: true })
+  for (const dir of [dirA, dirB, dirC])
+    await rm(dir, { recursive: true, force: true })
 })
 
-async function initShell(name = '测试空间'): Promise<void> {
-  await initSpace(shell, name)
+describe('createSpace', () => {
+  it('创建空空间', async () => {
+    const { data, space } = await createSpace([], '  我的空间  ')
+    expect(space.name).toBe('我的空间')
+    expect(space.folders).toEqual([])
+    expect(space.primary).toBeUndefined()
+    expect(data).toHaveLength(1)
+  })
+
+  it('带首个文件夹创建：自动成为主成员', async () => {
+    const { space } = await createSpace([], 's', dirA)
+    expect(space.folders[0]?.path).toBe(dirA)
+    expect(space.primary).toBe(dirA)
+  })
+
+  it('重名与空名被拒绝', async () => {
+    const { data } = await createSpace([], 's')
+    await expect(createSpace(data, 's')).rejects.toThrow('已存在')
+    await expect(createSpace([], '   ')).rejects.toThrow('不能为空')
+  })
+
+  it('首个文件夹不存在时拒绝且不落数据', async () => {
+    await expect(createSpace([], 's', join(dirA, 'nope'))).rejects.toThrow('目录不存在')
+  })
+})
+
+describe('attachFolder', () => {
+  it('原地引用：只登记规范路径', async () => {
+    const { data } = await createSpace([], 's', dirA)
+    const result = await attachFolder(data, 's', dirB, { title: 'B 服务', desc: '负责 x' })
+    expect(result.folder).toEqual({ path: dirB, title: 'B 服务', desc: '负责 x' })
+    expect(result.space.primary).toBe(dirA)
+  })
+
+  it('一个文件夹全局只能属于一个空间', async () => {
+    const { data: d1 } = await createSpace([], 's1', dirA)
+    const { data: d2 } = await createSpace(d1, 's2')
+    await expect(attachFolder(d2, 's2', dirA)).rejects.toThrow('已是空间「s1」的成员')
+  })
+
+  it('title 撞其他成员身份键被拒绝', async () => {
+    const { data } = await createSpace([], 's', dirA)
+    await expect(attachFolder(data, 's', dirB, { title: basenameOf(dirA) })).rejects.toThrow('冲突')
+  })
+
+  it('不存在的目录被拒绝', async () => {
+    const { data } = await createSpace([], 's')
+    await expect(attachFolder(data, 's', join(dirA, 'nope'))).rejects.toThrow('目录不存在')
+  })
+})
+
+describe('detachFolder / setPrimary', () => {
+  it('摘除不动磁盘；摘除主成员时回退为剩余首位', async () => {
+    let { data } = await createSpace([], 's', dirA)
+    data = (await attachFolder(data, 's', dirB)).data
+    const result = await detachFolder(data, 's', dirA)
+    expect(result.space.folders.map(f => f.path)).toEqual([dirB])
+    expect(result.space.primary).toBe(dirB)
+    expect(await canonicalize(dirA)).toBeTruthy()
+  })
+
+  it('成员引用支持路径、title、目录名', async () => {
+    let { data } = await createSpace([], 's', dirA)
+    data = (await attachFolder(data, 's', dirB, { title: 'B' })).data
+    expect((await setPrimary(data, 's', 'B')).space.primary).toBe(dirB)
+    expect((await setPrimary(data, 's', basenameOf(dirA))).space.primary).toBe(dirA)
+    expect((await setPrimary(data, 's', dirB)).space.primary).toBe(dirB)
+  })
+})
+
+describe('setFolderTitle / setFolderDesc', () => {
+  it('设置与清除', async () => {
+    let { data } = await createSpace([], 's', dirA)
+    data = (await setFolderTitle(data, 's', dirA, '甲')).data
+    data = (await setFolderDesc(data, 's', dirA, '说明')).data
+    const space = findSpace(data, 's')
+    expect(space.folders[0]).toEqual({ path: dirA, title: '甲', desc: '说明' })
+    data = (await setFolderTitle(data, 's', dirA, '')).data
+    data = (await setFolderDesc(data, 's', dirA, '')).data
+    expect(findSpace(data, 's').folders[0]).toEqual({ path: dirA })
+  })
+
+  it('title 撞车被拒绝', async () => {
+    let { data } = await createSpace([], 's', dirA)
+    data = (await attachFolder(data, 's', dirB, { title: 'B' })).data
+    await expect(setFolderTitle(data, 's', dirA, 'B')).rejects.toThrow('冲突')
+  })
+})
+
+describe('doctorSpace', () => {
+  it('danger-full-access 下全部可写', async () => {
+    const { space } = await createSpace([], 's', dirA)
+    const report = await doctorSpace(space, dirA, 'danger-full-access')
+    expect(report.folders[0]?.writability).toBe('writable')
+  })
+
+  it('workspace-write：cwd 覆盖成员才可写；cwd 在成员内部为部分可写', async () => {
+    let { data } = await createSpace([], 's', dirA)
+    data = (await attachFolder(data, 's', dirB)).data
+    const space = findSpace(data, 's')
+
+    const fromA = await doctorSpace(space, dirA, 'workspace-write')
+    expect(fromA.folders.find(f => f.path === dirA)?.writability).toBe('writable')
+    expect(fromA.folders.find(f => f.path === dirB)?.writability).toBe('read-only')
+
+    const subOfB = join(dirB, 'sub')
+    await mkdir(subOfB)
+    const fromSubB = await doctorSpace(space, subOfB, 'workspace-write')
+    expect(fromSubB.folders.find(f => f.path === dirB)?.writability).toBe('partial')
+  })
+
+  it('unknown 模式下可达性为 null 而非放行', async () => {
+    const { space } = await createSpace([], 's', dirA)
+    const report = await doctorSpace(space, dirA, 'unknown')
+    expect(report.folders[0]?.writability).toBeNull()
+  })
+
+  it('缺失目录报 missing', async () => {
+    const { space } = await createSpace([], 's', dirA)
+    await rm(dirA, { recursive: true, force: true })
+    const report = await doctorSpace(space, dirC, 'danger-full-access')
+    expect(report.folders[0]?.health).toBe('missing')
+    expect(report.folders[0]?.writability).toBe('read-only')
+  })
+})
+
+function basenameOf(path: string): string {
+  return path.split('/').pop()!
 }
-
-/** clone 替身：只落目录与 .git 标记，不发起网络 */
-async function fakeClone(root: string, url: string): Promise<void> {
-  await mountProject(root, url, {}, async (args, cwd) => {
-    await mkdir(join(cwd, args[2]!), { recursive: true })
-    await writeFile(join(cwd, args[2]!, '.git'), '')
-  })
-}
-
-describe('initSpace', () => {
-  it('生成 space.yaml 与 projects/，缺省名取目录名', async () => {
-    const file = await initSpace(shell)
-    expect(file.name).toBe(shell.split('/').pop())
-    expect(await canonicalize(join(shell, 'space.yaml'))).toBeTruthy()
-    expect(await canonicalize(join(shell, 'projects', '.gitkeep'))).toBeTruthy()
-  })
-
-  it('重复 init 拒绝且不覆盖', async () => {
-    await initShell('甲')
-    await expect(initSpace(shell, '乙')).rejects.toThrow('已是多项目空间「甲」')
-  })
-})
-
-describe('mountProject', () => {
-  it('本机目录走 symlink，并可被盘点为 outside-shell', async () => {
-    await initShell()
-    const project = await mountProject(shell, outside, { name: 'ext' })
-    expect(project.path).toBe('projects/ext')
-    const [status] = await listSpace(shell)
-    expect(status?.health).toBe('outside-shell')
-    expect(status?.realPath).toBe(outside)
-  })
-
-  it('git URL 走 clone（execGit 注入替身）', async () => {
-    await initShell()
-    const calls: string[][] = []
-    const project = await mountProject(shell, 'git@github.com:a/b.git', {}, async (args, cwd) => {
-      calls.push(args)
-      await mkdir(join(cwd, args[2]!), { recursive: true })
-      await writeFile(join(cwd, args[2]!, '.git'), '')
-    })
-    expect(project.path).toBe('projects/b')
-    expect(calls).toEqual([['clone', 'git@github.com:a/b.git', 'projects/b']])
-    expect((await listSpace(shell))[0]?.health).toBe('ok')
-  })
-
-  it('重复挂载同一路径被拒绝', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    await expect(mountProject(shell, outside, { name: 'ext' })).rejects.toThrow('已在空间中')
-  })
-
-  it('同一真实目录换名字重复挂入被拒绝（clone 检出不受此限）', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    await expect(mountProject(shell, outside, { name: 'ext-alias' })).rejects.toThrow('已作为 projects/ext 挂在空间中')
-  })
-
-  it('不存在的本机目录被拒绝', async () => {
-    await initShell()
-    await expect(mountProject(shell, join(outside, 'nope'))).rejects.toThrow('目录不存在')
-  })
-
-  it('title 撞其他成员的身份键（目录名/title）被拒绝，且不产生副作用', async () => {
-    await initShell()
-    await fakeClone(shell, 'git@github.com:a/ext.git')
-    const noClone = async (): Promise<void> => {
-      throw new Error('不应执行到 clone')
-    }
-    // 撞目录名：execGit 不应被调用（校验先于副作用）
-    await expect(mountProject(shell, 'git@github.com:a/other.git', { title: 'ext' }, noClone))
-      .rejects
-      .toThrow('显示名「ext」与现有成员 projects/ext 冲突')
-    // 撞既有 title
-    const { loadSpaceFile, saveSpaceFile } = await import('./space-file.ts')
-    const file = await loadSpaceFile(shell)
-    file.projects.find(p => p.path === 'projects/ext')!.title = '专属名'
-    await saveSpaceFile(shell, file)
-    await expect(mountProject(shell, 'git@github.com:a/third.git', { title: '专属名' }, noClone))
-      .rejects
-      .toThrow('冲突')
-  })
-
-  it('title 显式传入才写入，缺省则不落字段', async () => {
-    await initShell()
-    const withTitle = await mountProject(shell, outside, { name: 'ext', title: '外围项目' })
-    expect(withTitle.title).toBe('外围项目')
-    expect((await listSpace(shell))[0]?.title).toBe('外围项目')
-    await fakeClone(shell, 'git@github.com:a/plain.git')
-    expect((await listSpace(shell)).find(p => p.path === 'projects/plain')?.title).toBeUndefined()
-  })
-})
-
-describe('unmountProject / setProjectDesc', () => {
-  it('unmount 只改 space.yaml，磁盘文件不动', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    await unmountProject(shell, 'ext')
-    expect(await listSpace(shell)).toEqual([])
-    expect(await canonicalize(outside)).toBeTruthy()
-  })
-
-  it('setdesc 写入后可读，空串清除', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    await setProjectDesc(shell, 'ext', '外围仓库')
-    expect((await listSpace(shell))[0]?.desc).toBe('外围仓库')
-    await setProjectDesc(shell, 'ext', '')
-    expect((await listSpace(shell))[0]?.desc).toBeUndefined()
-  })
-
-  it('引用不存在的项目时报现有成员', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    await expect(unmountProject(shell, 'nope')).rejects.toThrow('projects/ext')
-  })
-})
-
-describe('listSpace / doctorSpace', () => {
-  it('missing 成员被标出', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    await rm(outside, { recursive: true })
-    expect((await listSpace(shell))[0]?.health).toBe('missing')
-  })
-
-  it('danger-full-access 下壳外成员也可写', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    const report = await doctorSpace(shell, shell, 'danger-full-access')
-    expect(report.projects[0]?.writable).toBe(true)
-  })
-
-  it('workspace-write 下壳外成员只读、壳内成员可写', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    await fakeClone(shell, 'git@github.com:a/inner.git')
-    const report = await doctorSpace(shell, shell, 'workspace-write')
-    expect(report.projects.find(p => p.path === 'projects/ext')?.writable).toBe(false)
-    expect(report.projects.find(p => p.path === 'projects/inner')?.writable).toBe(true)
-  })
-
-  it('会话 cwd 在某个成员内时，其他成员不可写', async () => {
-    await initShell()
-    await fakeClone(shell, 'git@github.com:a/a.git')
-    await fakeClone(shell, 'git@github.com:a/b.git')
-    const report = await doctorSpace(shell, join(shell, 'projects', 'a'), 'workspace-write')
-    expect(report.projects.find(p => p.path === 'projects/a')?.writable).toBe(true)
-    expect(report.projects.find(p => p.path === 'projects/b')?.writable).toBe(false)
-  })
-
-  it('unknown 模式下可写性为 null 而非放行', async () => {
-    await initShell()
-    await mountProject(shell, outside, { name: 'ext' })
-    const report = await doctorSpace(shell, shell, 'unknown')
-    expect(report.projects[0]?.writable).toBeNull()
-  })
-})

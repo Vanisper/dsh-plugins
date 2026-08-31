@@ -1,56 +1,58 @@
 // @env node
 import type { Context } from '@deepseek-ai/cordis'
 import type { WorkspaceId, WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
-import type { SpacesRegistry } from './registry.ts'
-import { basename, join } from 'node:path'
-import { canonicalize } from './locate.ts'
-import { loadSpaceFile } from './space-file.ts'
+import type { SpacesStore } from './registry.ts'
+import type { SpaceEntity } from './types.ts'
+import { basename } from 'node:path'
+import { canonicalize } from './resolve.ts'
 
 export type Logger = (message: string) => void
 
 /**
- * 把一个空间的壳根与全部成员项目登记为核心 workspace
+ * 把一个空间的全部成员登记为核心 workspace
  *
  * @description
- * - 用 insertBefore 把成员排到壳根之后，保持 space.yaml 顺序相邻
- * - 登记时显式传 title：成员取 space.yaml 的 title 或壳内目录名，避免 symlink 目标名盖过空间语义
- * - 幂等：重复登记同一路径返回既有 workspace（不改动既有标题）；单条失败只跳过该条
+ * - 主成员排首位，其余保持注册表顺序；整块排在成员当前最早出现的位置
+ * - 登记时显式传 title（folder.title ?? 目录名）；已有记录的路径与标题不被覆盖
+ * - 幂等：重复登记同一路径返回既有 workspace；单个缺失目录只跳过该条
  *
  * 导出仅为单测可直接覆盖排序逻辑，不作为插件的公共 API
  */
-export async function registerOneSpace(ws: WorkspaceRegistry, root: string, log: Logger): Promise<void> {
-  const realRoot = await canonicalize(root)
-  if (!realRoot) {
-    log(`[dsh-space] 空间根目录不存在，跳过登记：${root}`)
-    return
-  }
-  const file = await loadSpaceFile(realRoot)
-  const shellId = (await ws.create(realRoot, file.name)).id
-  const memberIds: WorkspaceId[] = []
-  for (const project of file.projects) {
-    const real = await canonicalize(join(realRoot, project.path))
-    if (!real) {
-      log(`[dsh-space] 成员目录不存在，跳过：${realRoot}/${project.path}`)
+export async function registerOneSpace(ws: WorkspaceRegistry, space: SpaceEntity, log: Logger): Promise<void> {
+  const ordered = [...space.folders].sort((a, b) => {
+    if (a.path === space.primary)
+      return -1
+    if (b.path === space.primary)
+      return 1
+    return 0
+  })
+  const blockIds: WorkspaceId[] = []
+  for (const folder of ordered) {
+    if (!(await canonicalize(folder.path))) {
+      log(`[dsh-space] 成员目录不存在，跳过：${folder.path}`)
       continue
     }
-    memberIds.push((await ws.create(real, project.title ?? basename(project.path))).id)
+    blockIds.push((await ws.create(folder.path, folder.title ?? basename(folder.path))).id)
   }
+  if (blockIds.length === 0)
+    return
   const order = ws.list().map(workspace => workspace.id)
-  const anchor = order.slice(order.indexOf(shellId) + 1).find(id => !memberIds.includes(id))
-  for (const memberId of memberIds)
-    await ws.insertBefore(memberId, anchor)
+  const positions = blockIds.map(id => order.indexOf(id)).filter(index => index >= 0)
+  const anchor = order.slice(Math.min(...positions)).find(id => !blockIds.includes(id))
+  for (const id of blockIds)
+    await ws.insertBefore(id, anchor)
 }
 
-/** 登记入口的统一形态：读取名录、逐空间登记、失败只记日志 */
+/** 登记入口的统一形态：读取注册表、逐空间登记、失败只记日志 */
 export type RefreshWorkspaces = () => void
 
 /**
  * 启动工作区自动登记，并返回可手动触发重刷的函数
  *
- * @description 触发时机：启动一次 + 名录每次变化（登记幂等，重跑无副作用）；
- * 另把返回的 refresh 交给工具/命令适配器，在 init/mount/unmount 后即时调用
+ * @description 触发时机：启动一次 + 注册表每次变化（登记幂等，重跑无副作用）；
+ * 返回的 refresh 同时交给工具/命令适配器，在 create/attach/detach 后即时调用
  */
-export function startWorkspaceRegistration(ctx: Context, registry: SpacesRegistry, log: Logger): RefreshWorkspaces {
+export function startWorkspaceRegistration(ctx: Context, store: SpacesStore, log: Logger): RefreshWorkspaces {
   const ws = ctx.get('workspaceRegistry')
   if (!ws) {
     log('[dsh-space] workspaceRegistry 不可用（非 web profile？），跳过工作区自动登记')
@@ -58,7 +60,7 @@ export function startWorkspaceRegistration(ctx: Context, registry: SpacesRegistr
   }
   const refresh = (): void => {
     void Promise.allSettled(
-      registry.list().map(root => registerOneSpace(ws, root, log)),
+      store.list().map(space => registerOneSpace(ws, space, log)),
     ).then((results) => {
       for (const result of results) {
         if (result.status === 'rejected')
@@ -67,6 +69,6 @@ export function startWorkspaceRegistration(ctx: Context, registry: SpacesRegistr
     })
   }
   refresh()
-  registry.watch(refresh)
+  store.watch(refresh)
   return refresh
 }

@@ -6,7 +6,7 @@
 
 | 包 | 说明 |
 | --- | --- |
-| [dsh-space](packages/space/) | 多项目空间：壳工作空间 + `space.yaml` 载体 + 空间地图上下文注入 + 项目自动登记为 workspace |
+| [dsh-space](packages/space/) | 多项目空间：命名实体 + 文件夹原地引用 + 空间地图上下文注入 + 成员自动登记为 workspace |
 
 ## 调研笔记
 

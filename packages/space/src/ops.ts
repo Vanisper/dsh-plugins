@@ -1,22 +1,10 @@
-import type { ProjectStatus, SandboxModeName, SpaceFileData, SpaceProject } from './types.ts'
+import type { FolderStatus, SandboxModeName, SpaceEntity, SpaceFolder, Writability } from './types.ts'
 // @env node
-import { execFile } from 'node:child_process'
-import { mkdir, stat, symlink, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
-import { promisify } from 'node:util'
-import { PROJECTS_DIR } from './constants.ts'
-import { canonicalize, isUnder } from './locate.ts'
-import { loadSpaceFile, normalizeProjectPath, saveSpaceFile } from './space-file.ts'
+import { stat } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { canonicalize, isUnder } from './resolve.ts'
 
-const execFileAsync = promisify(execFile)
-
-export type ExecGit = (args: string[], cwd: string) => Promise<void>
-
-const defaultExecGit: ExecGit = async (args, cwd) => {
-  await execFileAsync('git', args, { cwd })
-}
-
-/** 空间操作的预期内失败（目标已存在、目录无效等），message 直接面向调用者 */
+/** 空间操作的预期内失败（名称冲突、目录无效等），message 直接面向调用者 */
 export class SpaceOpError extends Error {
   constructor(message: string) {
     super(message)
@@ -24,190 +12,207 @@ export class SpaceOpError extends Error {
   }
 }
 
-/** 在 cwd 建立空间骨架：space.yaml + projects/。已存在 space.yaml 时拒绝，绝不覆盖 */
-export async function initSpace(cwd: string, name?: string): Promise<SpaceFileData> {
-  const root = await canonicalize(cwd)
-  if (!root)
-    throw new SpaceOpError(`目录不存在：${cwd}`)
-  const existing = await loadSpaceFile(root).catch(() => undefined)
-  if (existing)
-    throw new SpaceOpError(`该目录已是多项目空间「${existing.name}」（space.yaml 已存在）`)
-  const file: SpaceFileData = { version: 1, name: name?.trim() || basename(root), projects: [], extras: {} }
-  await saveSpaceFile(root, file)
-  await mkdir(join(root, PROJECTS_DIR), { recursive: true })
-  await writeFile(join(root, PROJECTS_DIR, '.gitkeep'), '', 'utf8')
-  return file
+/** 文件夹的身份键：引用匹配与 title 冲突校验共用同一组口径，防止两套规则漂移 */
+function folderIdentityKeys(folder: SpaceFolder): string[] {
+  return [folder.path, basename(folder.path), ...(folder.title ? [folder.title] : [])]
 }
 
-function isGitUrl(target: string): boolean {
-  // SCP 风格的 SSH 地址（git@host:path）没有协议头，单独判；字符类排除分隔符以免歧义回溯
-  return /^\w[\w+-]*:\/\//.test(target) || /^[^/@]+@[^/:]+:/.test(target) || target.endsWith('.git')
-}
-
-function projectNameFromTarget(target: string): string {
-  const trimmed = target.replace(/[/\\]+$/, '')
-  const base = basename(trimmed).replace(/\.git$/, '')
-  if (!base)
-    throw new SpaceOpError(`无法从 ${target} 推断项目名，请显式提供 name`)
-  return base
+/** 按 id 或名称定位空间 */
+export function findSpace(data: SpaceEntity[], ref: string): SpaceEntity {
+  const hit = data.find(space => space.id === ref || space.name === ref.trim())
+  if (!hit)
+    throw new SpaceOpError(`没有空间「${ref}」（现有：${data.map(s => s.name).join('、') || '无'}）`)
+  return hit
 }
 
 /**
- * 挂载项目到壳内 projects/
+ * 按引用定位成员文件夹
  *
- * @description
- * - git URL 走 clone，本机目录走 symlink
- * - symlink 成员的真实路径在壳外：workspace-write 模式下写入会被沙盒拒绝（realpath 判定），doctor 会如实报告
- *
- * @param root 壳根规范路径
- * @param target git URL 或本机目录路径
- * @param options 挂载选项
- * @param options.name 壳内目录名（projects/<name>），缺省从 target 推断
- * @param options.title 显示名，写入 space.yaml；缺省时显示端以目录名兜底
- * @param execGit git 执行器，测试中可注入替身
- * @throws {SpaceOpError} 目标已存在、clone 失败或本机目录无效
+ * @description 依次尝试精确路径、title、目录名；都不中且引用像路径时，canonicalize 后再比一次
  */
-export async function mountProject(
-  root: string,
-  target: string,
-  options: { name?: string, title?: string } = {},
-  execGit: ExecGit = defaultExecGit,
-): Promise<SpaceProject> {
-  const file = await loadSpaceFile(root)
-  const projectName = options.name?.trim() || projectNameFromTarget(target)
-  const relPath = `${PROJECTS_DIR}/${projectName}`
-  if (file.projects.some(p => p.path === relPath))
-    throw new SpaceOpError(`项目已在空间中：${relPath}`)
+export async function findFolder(space: SpaceEntity, ref: string): Promise<SpaceFolder> {
+  const syncHit = space.folders.find(folder => folderIdentityKeys(folder).includes(ref))
+  if (syncHit)
+    return syncHit
+  const asPath = await canonicalize(ref)
+  const pathHit = asPath ? space.folders.find(folder => folder.path === asPath) : undefined
+  if (!pathHit)
+    throw new SpaceOpError(`空间「${space.name}」中没有成员「${ref}」（现有：${space.folders.map(f => f.path).join('、') || '无'}）`)
+  return pathHit
+}
 
+function assertUniqueTitle(space: SpaceEntity, title: string): void {
+  const conflict = space.folders.find(folder => folderIdentityKeys(folder).includes(title))
+  if (conflict)
+    throw new SpaceOpError(`显示名「${title}」与现有成员 ${conflict.path} 冲突，请换一个`)
+}
+
+function newSpaceId(): string {
+  return `sp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/**
+ * 创建空间
+ *
+ * @description 纯注册表操作，不动磁盘；可选地同时挂入首个文件夹（自动成为主成员）
+ *
+ * @throws {SpaceOpError} 名称为空或与既有空间重名、首个文件夹无效
+ */
+export async function createSpace(data: SpaceEntity[], name: string, firstFolderPath?: string): Promise<{ data: SpaceEntity[], space: SpaceEntity }> {
+  const trimmed = name.trim()
+  if (!trimmed)
+    throw new SpaceOpError('空间名称不能为空')
+  if (data.some(space => space.name === trimmed))
+    throw new SpaceOpError(`空间「${trimmed}」已存在`)
+
+  const folders: SpaceFolder[] = []
+  if (firstFolderPath !== undefined)
+    folders.push(await prepareFolder(data, firstFolderPath))
+
+  const space: SpaceEntity = {
+    id: newSpaceId(),
+    name: trimmed,
+    folders,
+    ...(folders[0] ? { primary: folders[0].path } : {}),
+  }
+  return { data: [...data, space], space }
+}
+
+/** attach 的公共校验：存在、是目录、全局唯一（任一空间的成员都不能重复） */
+async function prepareFolder(data: SpaceEntity[], rawPath: string): Promise<SpaceFolder> {
+  const real = await canonicalize(rawPath)
+  if (!real)
+    throw new SpaceOpError(`目录不存在：${rawPath}`)
+  if (!(await stat(real)).isDirectory())
+    throw new SpaceOpError(`不是目录：${rawPath}`)
+  const holder = data.find(space => space.folders.some(folder => folder.path === real))
+  if (holder)
+    throw new SpaceOpError(`该目录已是空间「${holder.name}」的成员，一个文件夹只能属于一个空间`)
+  return { path: real }
+}
+
+/**
+ * 挂入文件夹
+ *
+ * @description 原地引用：只登记规范路径，磁盘位置不动；首个成员自动成为主成员
+ *
+ * @throws {SpaceOpError} 目录无效、已被任何空间收录、显示名撞车
+ */
+export async function attachFolder(data: SpaceEntity[], spaceRef: string, rawPath: string, options: { title?: string, desc?: string } = {}): Promise<{ data: SpaceEntity[], space: SpaceEntity, folder: SpaceFolder }> {
+  const space = findSpace(data, spaceRef)
+  const folder = await prepareFolder(data, rawPath)
   const title = options.title?.trim()
   if (title) {
-    // title 是身份键之一（findProject 会按它定位），不能撞其他成员的 path/目录名/title
-    const conflict = file.projects.find(p => identityKeys(p).includes(title))
-    if (conflict)
-      throw new SpaceOpError(`显示名「${title}」与现有成员 ${conflict.path} 冲突，请换一个`)
+    assertUniqueTitle(space, title)
+    folder.title = title
   }
+  const desc = options.desc?.trim()
+  if (desc)
+    folder.desc = desc
 
-  const absPath = join(root, relPath)
-  if (await canonicalize(absPath))
-    throw new SpaceOpError(`目标路径已存在：${absPath}（如需纳入请用 unmount 后手工处理）`)
-
-  if (isGitUrl(target)) {
-    await mkdir(join(root, PROJECTS_DIR), { recursive: true })
-    try {
-      await execGit(['clone', target, relPath], root)
-    }
-    catch (error) {
-      throw new SpaceOpError(`git clone 失败：${(error as Error).message}`)
-    }
+  const next: SpaceEntity = {
+    ...space,
+    folders: [...space.folders, folder],
+    primary: space.primary ?? folder.path,
   }
-  else {
-    const real = await canonicalize(target)
-    if (!real)
-      throw new SpaceOpError(`本机目录不存在：${target}`)
-    if (!(await stat(real)).isDirectory())
-      throw new SpaceOpError(`不是目录：${target}`)
-    // symlink 共享真实身份：同一真实目录不允许换个名字重复挂入
-    // （clone 分支不做此检查——同一 URL 的两份检出是合法的两个项目）
-    for (const existing of file.projects) {
-      const existingReal = await canonicalize(join(root, existing.path))
-      if (existingReal === real)
-        throw new SpaceOpError(`该目录已作为 ${existing.path} 挂在空间中，无需重复挂载`)
-    }
-    await mkdir(join(root, PROJECTS_DIR), { recursive: true })
-    await symlink(real, absPath, 'dir')
+  return { data: data.map(item => (item.id === space.id ? next : item)), space: next, folder }
+}
+
+/** 摘除文件夹：只改注册表，绝不触碰磁盘；摘除主成员时主成员回退为剩余首位 */
+export async function detachFolder(data: SpaceEntity[], spaceRef: string, folderRef: string): Promise<{ data: SpaceEntity[], space: SpaceEntity, folder: SpaceFolder }> {
+  const space = findSpace(data, spaceRef)
+  const folder = await findFolder(space, folderRef)
+  const folders = space.folders.filter(item => item !== folder)
+  const next: SpaceEntity = { ...space, folders }
+  if (next.primary === folder.path)
+    next.primary = folders[0]?.path
+  return { data: data.map(item => (item.id === space.id ? next : item)), space: next, folder }
+}
+
+/** 设置主成员 */
+export async function setPrimary(data: SpaceEntity[], spaceRef: string, folderRef: string): Promise<{ data: SpaceEntity[], space: SpaceEntity }> {
+  const space = findSpace(data, spaceRef)
+  const folder = await findFolder(space, folderRef)
+  const next: SpaceEntity = { ...space, primary: folder.path }
+  return { data: data.map(item => (item.id === space.id ? next : item)), space: next }
+}
+
+/** 设置/清除成员显示名（空串视为清除）；设置时校验不撞其他成员身份键 */
+export async function setFolderTitle(data: SpaceEntity[], spaceRef: string, folderRef: string, title: string): Promise<{ data: SpaceEntity[], folder: SpaceFolder }> {
+  const space = findSpace(data, spaceRef)
+  const folder = await findFolder(space, folderRef)
+  const trimmed = title.trim()
+  const nextFolder: SpaceFolder = { path: folder.path, ...(folder.desc ? { desc: folder.desc } : {}) }
+  if (trimmed) {
+    const others: SpaceEntity = { ...space, folders: space.folders.filter(item => item !== folder) }
+    assertUniqueTitle(others, trimmed)
+    nextFolder.title = trimmed
   }
-
-  const project: SpaceProject = { path: relPath }
-  if (title)
-    project.title = title
-  file.projects.push(project)
-  await saveSpaceFile(root, file)
-  return project
+  const next: SpaceEntity = { ...space, folders: space.folders.map(item => (item === folder ? nextFolder : item)) }
+  return { data: data.map(item => (item.id === space.id ? next : item)), folder: nextFolder }
 }
 
-/** 成员的身份键：项目引用匹配与 title 冲突校验共用同一组口径，防止两套规则漂移 */
-function identityKeys(project: SpaceProject): string[] {
-  return [project.path, basename(project.path), ...(project.title ? [project.title] : [])]
-}
-
-function findProject(file: SpaceFileData, ref: string): SpaceProject {
-  const normalized = normalizeProjectPath(ref)
-  const hit = file.projects.find(p => p.path === normalized || identityKeys(p).includes(ref))
-  if (!hit)
-    throw new SpaceOpError(`空间中没有项目「${ref}」（现有：${file.projects.map(p => p.path).join('、') || '无'}）`)
-  return hit
-}
-
-/** 解除挂载：只改 space.yaml，绝不触碰磁盘上的项目文件 */
-export async function unmountProject(root: string, ref: string): Promise<SpaceProject> {
-  const file = await loadSpaceFile(root)
-  const hit = findProject(file, ref)
-  file.projects = file.projects.filter(p => p !== hit)
-  await saveSpaceFile(root, file)
-  return hit
-}
-
-/** 设置/清除项目的一句话说明（空串视为清除），注入空间地图供模型定位 */
-export async function setProjectDesc(root: string, ref: string, desc: string): Promise<SpaceProject> {
-  const file = await loadSpaceFile(root)
-  const hit = findProject(file, ref)
+/** 设置/清除成员说明（空串视为清除） */
+export async function setFolderDesc(data: SpaceEntity[], spaceRef: string, folderRef: string, desc: string): Promise<{ data: SpaceEntity[], folder: SpaceFolder }> {
+  const space = findSpace(data, spaceRef)
+  const folder = await findFolder(space, folderRef)
   const trimmed = desc.trim()
-  if (trimmed)
-    hit.desc = trimmed
-  else
-    delete hit.desc
-  await saveSpaceFile(root, file)
-  return hit
+  const nextFolder: SpaceFolder = { path: folder.path, ...(folder.title ? { title: folder.title } : {}), ...(trimmed ? { desc: trimmed } : {}) }
+  const next: SpaceEntity = { ...space, folders: space.folders.map(item => (item === folder ? nextFolder : item)) }
+  return { data: data.map(item => (item.id === space.id ? next : item)), folder: nextFolder }
 }
 
-/** 盘点：space.yaml 条目逐个落到磁盘状态 */
-export async function listSpace(root: string): Promise<ProjectStatus[]> {
-  const file = await loadSpaceFile(root)
-  const statuses: ProjectStatus[] = []
-  for (const project of file.projects) {
-    const absPath = join(root, project.path)
-    const realPath = await canonicalize(absPath)
-    let health: ProjectStatus['health'] = 'ok'
-    if (!realPath)
-      health = 'missing'
-    else if (!isUnder(realPath, root))
-      health = 'outside-shell'
-    statuses.push({ ...project, absPath, realPath, health })
-  }
-  return statuses
+/** 删除空间实体：成员文件夹只解除关联，磁盘不动 */
+export function deleteSpace(data: SpaceEntity[], spaceRef: string): { data: SpaceEntity[], space: SpaceEntity } {
+  const space = findSpace(data, spaceRef)
+  return { data: data.filter(item => item.id !== space.id), space }
+}
+
+/** 盘点：逐成员落一次存在性 */
+export async function listFolders(space: SpaceEntity): Promise<FolderStatus[]> {
+  return Promise.all(space.folders.map(async (folder): Promise<FolderStatus> => ({
+    ...folder,
+    health: (await canonicalize(folder.path)) ? 'ok' : 'missing',
+  })))
 }
 
 export interface DoctorReport {
-  root: string
-  /** 无法从宿主解析沙盒策略时为 'unknown'，此时 writable 为 null（未知而非放行） */
+  space: SpaceEntity
   mode: SandboxModeName | 'unknown'
   sessionCwd: string
-  projects: (ProjectStatus & { writable: boolean | null })[]
+  folders: (FolderStatus & { writability: Writability | null })[]
 }
 
 /**
- * 逐项目诊断存在性与当前会话沙盒模式下的可写性
+ * 逐成员诊断存在性与当前会话沙盒模式下的写入可达性
  *
- * @description 读取永不受沙盒限制；写入仅当 danger-full-access 或 realpath 落在会话 cwd 之内
+ * @description 读取永不受沙盒限制；写入在 danger-full-access 下全开，
+ * workspace-write 下以会话 cwd 子树为界（成员完整落在其中才算可写，cwd 在成员内部则只有该子树可写）
  */
-export async function doctorSpace(root: string, sessionCwd: string, mode: SandboxModeName | 'unknown'): Promise<DoctorReport> {
+export async function doctorSpace(space: SpaceEntity, sessionCwd: string, mode: SandboxModeName | 'unknown'): Promise<DoctorReport> {
   const sessionReal = await canonicalize(sessionCwd)
-  const projects = await listSpace(root)
+  const folders = await listFolders(space)
   return {
-    root,
+    space,
     mode,
     sessionCwd: sessionReal ?? sessionCwd,
-    projects: projects.map(project => ({
-      ...project,
-      writable: project.health === 'missing'
-        ? false
+    folders: folders.map((folder) => {
+      const writability = folder.health === 'missing'
+        ? 'read-only' as const
         : mode === 'danger-full-access'
-          ? true
+          ? 'writable' as const
           : mode === 'workspace-write'
-            ? sessionReal !== undefined && isUnder(project.realPath!, sessionReal)
+            ? sessionReal === undefined
+              ? 'read-only' as const
+              : isUnder(folder.path, sessionReal)
+                ? 'writable' as const
+                : isUnder(sessionReal, folder.path)
+                  ? 'partial' as const
+                  : 'read-only' as const
             : mode === 'read-only'
-              ? false
-              : null,
-    })),
+              ? 'read-only' as const
+              : null
+      return { ...folder, writability }
+    }),
   }
 }

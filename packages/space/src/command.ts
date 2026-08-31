@@ -51,7 +51,7 @@ async function run(ctx: Context, registry: SpacesRegistry, refresh: RefreshWorks
     if (space)
       await registry.add(space.root)
     refresh()
-    return { kind: 'success', text: `空间「${file.name}」已建立：space.yaml + projects/。文档体系可让 agent 走 workspace-hub skill 补齐。` }
+    return { kind: 'success', text: `空间「${file.name}」已建立：space.yaml + projects/。文档与约定（README/AGENTS.md/docs/）按需逐步补齐即可。` }
   }
 
   const space = await locateSpace(cwd)

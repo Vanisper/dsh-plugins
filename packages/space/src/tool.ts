@@ -69,7 +69,7 @@ export function registerTool(ctx: Context, registry: SpacesRegistry, refresh: Re
           if (root)
             await registry.add(root)
           refresh()
-          return asJson({ ok: true, space: { root, name: file.name }, hint: '骨架已建：space.yaml + projects/。文档体系（README/docs/AGENTS.md）可由 workspace-hub skill 补齐。' })
+          return asJson({ ok: true, space: { root, name: file.name }, hint: '骨架已建：space.yaml + projects/。文档与约定（README/AGENTS.md/docs/）按需逐步补齐即可。' })
         }
 
         const space = await locateSpace(cwd)

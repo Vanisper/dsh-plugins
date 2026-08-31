@@ -74,6 +74,12 @@ describe('mountProject', () => {
     await expect(mountProject(shell, outside, { name: 'ext' })).rejects.toThrow('已在空间中')
   })
 
+  it('同一真实目录换名字重复挂入被拒绝（clone 检出不受此限）', async () => {
+    await initShell()
+    await mountProject(shell, outside, { name: 'ext' })
+    await expect(mountProject(shell, outside, { name: 'ext-alias' })).rejects.toThrow('已作为 projects/ext 挂在空间中')
+  })
+
   it('不存在的本机目录被拒绝', async () => {
     await initShell()
     await expect(mountProject(shell, join(outside, 'nope'))).rejects.toThrow('目录不存在')

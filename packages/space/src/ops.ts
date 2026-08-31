@@ -98,6 +98,13 @@ export async function mountProject(
       throw new SpaceOpError(`本机目录不存在：${target}`)
     if (!(await stat(real)).isDirectory())
       throw new SpaceOpError(`不是目录：${target}`)
+    // symlink 共享真实身份：同一真实目录不允许换个名字重复挂入
+    // （clone 分支不做此检查——同一 URL 的两份检出是合法的两个项目）
+    for (const existing of file.projects) {
+      const existingReal = await canonicalize(join(root, existing.path))
+      if (existingReal === real)
+        throw new SpaceOpError(`该目录已作为 ${existing.path} 挂在空间中，无需重复挂载`)
+    }
     await mkdir(join(root, PROJECTS_DIR), { recursive: true })
     await symlink(real, absPath, 'dir')
   }

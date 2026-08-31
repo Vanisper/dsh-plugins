@@ -3,3 +3,7 @@ lib
 dist
 *.log
 .DS_Store
+
+# 本机的多项目空间绑定（space.yaml 是本机载体，不入库）
+/space.yaml
+/projects/

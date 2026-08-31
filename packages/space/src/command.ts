@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SpacesRegistry } from './registry.ts'
 import type { SandboxModeName } from './types.ts'
+import type { RefreshWorkspaces } from './workspaces.ts'
 import { COMMAND_NAME } from './constants.ts'
 import { locateSpace } from './locate.ts'
 import { doctorSpace, initSpace, listSpace, mountProject, setProjectDesc, unmountProject } from './ops.ts'
@@ -30,7 +31,7 @@ function resolveMode(ctx: Context, invocation: CommandInvocation): SandboxModeNa
   }
 }
 
-async function run(ctx: Context, registry: SpacesRegistry, invocation: CommandInvocation): Promise<CommandResult> {
+async function run(ctx: Context, registry: SpacesRegistry, refresh: RefreshWorkspaces, invocation: CommandInvocation): Promise<CommandResult> {
   const cwd = cwdOf(invocation)
   if (!cwd)
     return { kind: 'error', text: '无法确定会话工作目录' }
@@ -47,6 +48,7 @@ async function run(ctx: Context, registry: SpacesRegistry, invocation: CommandIn
     const space = await locateSpace(cwd)
     if (space)
       await registry.add(space.root)
+    refresh()
     return { kind: 'success', text: `空间「${file.name}」已建立：space.yaml + projects/。文档体系可让 agent 走 workspace-hub skill 补齐。` }
   }
 
@@ -85,6 +87,7 @@ async function run(ctx: Context, registry: SpacesRegistry, invocation: CommandIn
       if (!target)
         return { kind: 'error', text: `缺少目标。\n${USAGE}` }
       const project = await mountProject(space.root, target, name)
+      refresh()
       return { kind: 'success', text: `已挂入 ${project.path}` }
     }
     case 'unmount': {
@@ -92,6 +95,7 @@ async function run(ctx: Context, registry: SpacesRegistry, invocation: CommandIn
       if (!ref)
         return { kind: 'error', text: `缺少项目引用。\n${USAGE}` }
       const removed = await unmountProject(space.root, ref)
+      refresh()
       return { kind: 'success', text: `已解除挂载 ${removed.path}（磁盘文件未动）` }
     }
     case 'desc': {
@@ -107,14 +111,14 @@ async function run(ctx: Context, registry: SpacesRegistry, invocation: CommandIn
 }
 
 /** 注册用户侧 /space 命令 */
-export function registerCommand(ctx: Context, registry: SpacesRegistry): void {
+export function registerCommand(ctx: Context, registry: SpacesRegistry, refresh: RefreshWorkspaces): void {
   ctx.commands.register({
     name: COMMAND_NAME,
     description: '多项目空间：查看状态、初始化、挂载项目、诊断',
     input: { hint: USAGE.split('\n').slice(1).map(line => line.trim()).join('；') },
     handler: async (invocation) => {
       try {
-        return await run(ctx, registry, invocation)
+        return await run(ctx, registry, refresh, invocation)
       }
       catch (error) {
         return { kind: 'error', text: (error as Error).message }

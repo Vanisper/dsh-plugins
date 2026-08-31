@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { JsonValue } from '@deepseek-ai/dsh-tools'
 import type { SpacesRegistry } from './registry.ts'
 import type { SandboxModeName } from './types.ts'
+import type { RefreshWorkspaces } from './workspaces.ts'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { TOOL_NAME } from './constants.ts'
 import { locateSpace } from './locate.ts'
@@ -40,7 +41,7 @@ const TOOL_DESCRIPTION = `多项目空间（dsh-space）工具：以「壳工作
 约束：init 作用于会话当前目录；其余动作要求会话目录已在某空间内。unmount 不会删除文件。`
 
 /** 注册模型侧 space 工具 */
-export function registerTool(ctx: Context, registry: SpacesRegistry): void {
+export function registerTool(ctx: Context, registry: SpacesRegistry, refresh: RefreshWorkspaces): void {
   ctx.tools.register(defineTool({
     name: TOOL_NAME,
     description: TOOL_DESCRIPTION,
@@ -66,6 +67,7 @@ export function registerTool(ctx: Context, registry: SpacesRegistry): void {
           const root = (await locateSpace(cwd))?.root
           if (root)
             await registry.add(root)
+          refresh()
           return asJson({ ok: true, space: { root, name: file.name }, hint: '骨架已建：space.yaml + projects/。文档体系（README/docs/AGENTS.md）可由 workspace-hub skill 补齐。' })
         }
 
@@ -82,12 +84,14 @@ export function registerTool(ctx: Context, registry: SpacesRegistry): void {
             if (!args.target)
               return asJson({ ok: false, error: 'mount 需要 target（git URL 或本机目录路径）' })
             const project = await mountProject(space.root, args.target, args.name)
+            refresh()
             return asJson({ ok: true, mounted: project })
           }
           case 'unmount': {
             if (!args.target)
               return asJson({ ok: false, error: 'unmount 需要项目引用（path、title 或目录名）' })
             const removed = await unmountProject(space.root, args.target)
+            refresh()
             return asJson({ ok: true, unmounted: removed, note: '仅从 space.yaml 移除，磁盘文件未动' })
           }
           case 'setdesc': {

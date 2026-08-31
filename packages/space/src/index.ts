@@ -18,10 +18,11 @@ export default {
   inject: ['settings', 'tools', 'systemPrompt', 'commands'],
   apply(ctx: Context, config: DshSpaceConfig) {
     const registry = registerSpacesRegistry(ctx.settings)
-    registerTool(ctx, registry)
-    registerCommand(ctx, registry)
+    const refresh = config?.registerWorkspaces === false
+      ? (): void => {}
+      : startWorkspaceRegistration(ctx, registry, message => console.warn(message))
+    registerTool(ctx, registry, refresh)
+    registerCommand(ctx, registry, refresh)
     registerPromptContext(ctx)
-    if (config?.registerWorkspaces !== false)
-      startWorkspaceRegistration(ctx, registry, message => console.warn(message))
   },
 }

@@ -1,0 +1,4 @@
+# dsh-space bundle patch：`dsh plugin --profile <name> add` 安装后自动应用本层。
+- insert:
+    - id: dsh-space
+      name: dsh-space

@@ -10,12 +10,14 @@ import { doctorSpace, initSpace, listSpace, mountProject, setProjectDesc, unmoun
 
 const USAGE = `用法：
   /space                 查看当前空间状态
-  /space init [名称]     把当前目录初始化为多项目空间
+  /space init [空间名]   把当前目录初始化为多项目空间（缺省取目录名）
   /space doctor          逐项目诊断（存在性、当前沙盒模式下可写性）
-  /space mount <目标> [名称] [标题]   挂入项目（git URL 克隆 / 本机目录建链接；标题为可选显示名）
-  /space unmount <项目>  解除挂载（不删除磁盘文件）
-  /space desc <项目> <说明>    设置一句话项目说明
-  /space list-known      列出已登记的全部空间`
+  /space mount <目标> [目录名] [显示名]   挂入项目：git URL 克隆 / 本机目录建链接；目录名缺省取目标的目录名
+  /space unmount <项目引用>   解除挂载（不删除磁盘文件）
+  /space desc <项目引用> <说明>  设置一句话项目说明（会出现在空间地图里）
+  /space list-known      列出已登记的全部空间
+
+项目引用：成员路径（projects/foo）、显示名或目录名，任一即可定位`
 
 function cwdOf(invocation: CommandInvocation): string | undefined {
   return invocation.agent?.session?.header?.cwd

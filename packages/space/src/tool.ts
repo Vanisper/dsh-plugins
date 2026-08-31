@@ -37,8 +37,8 @@ function asJson(value: object): Record<string, JsonValue> {
 const NOT_IN_SPACE = '当前会话目录不在任何多项目空间内（向上未找到 space.yaml）。可先用 action=init 把当前目录初始化为空间。'
 
 const TOOL_DESCRIPTION = `多项目空间（dsh-space）工具：以「壳工作空间」组织多个项目仓库——壳根承载 space.yaml 与文档，项目挂在 projects/ 下、git 各自独立。
-动作：list（列出当前空间的成员项目与磁盘状态）｜ init（把当前会话目录初始化为空间，可选 name）｜ mount（把 git URL 或本机目录挂入当前空间 projects/，可选 name）｜ unmount（按 path/title 解除挂载，绝不删除磁盘文件）｜ setdesc（设置项目的一句话说明，会出现在空间地图里）｜ doctor（逐项目诊断存在性与当前沙盒模式下的可写性）。
-约束：init 作用于会话当前目录；其余动作要求会话目录已在某空间内。unmount 不会删除文件。`
+动作：list（列出当前空间的成员项目与磁盘状态）｜ init（把当前会话目录初始化为空间，可选 name）｜ mount（把 git URL 或本机目录挂入当前空间 projects/，可选 name 目录名与 title 显示名）｜ unmount（按项目引用解除挂载，绝不删除磁盘文件）｜ setdesc（设置项目的一句话说明，会出现在空间地图里）｜ doctor（逐项目诊断存在性与当前沙盒模式下的可写性）。
+项目引用：成员路径（projects/foo）、title 或目录名，任一即可定位。约束：init 作用于会话当前目录；其余动作要求会话目录已在某空间内。unmount 不会删除文件。`
 
 /** 注册模型侧 space 工具 */
 export function registerTool(ctx: Context, registry: SpacesRegistry, refresh: RefreshWorkspaces): void {
@@ -47,7 +47,7 @@ export function registerTool(ctx: Context, registry: SpacesRegistry, refresh: Re
     description: TOOL_DESCRIPTION,
     parameters: {
       action: { type: 'string', required: true, description: 'list | init | mount | unmount | setdesc | doctor' },
-      target: { type: 'string', description: 'mount 的目标（git URL 或本机目录路径）；unmount/setdesc 的项目引用（path、title 或目录名）' },
+      target: { type: 'string', description: 'mount 的目标（git URL 或本机目录路径）；unmount/setdesc 的项目引用（成员路径、title 或目录名）' },
       name: { type: 'string', description: '可选：init 的空间名、mount 的项目目录名' },
       title: { type: 'string', description: '可选：mount 的项目显示名，写入 space.yaml；缺省时显示端以目录名兜底' },
       desc: { type: 'string', description: 'setdesc 的一句话项目说明' },

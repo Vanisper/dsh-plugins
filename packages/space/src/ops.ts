@@ -79,6 +79,14 @@ export async function mountProject(
   if (file.projects.some(p => p.path === relPath))
     throw new SpaceOpError(`项目已在空间中：${relPath}`)
 
+  const title = options.title?.trim()
+  if (title) {
+    // title 是身份键之一（findProject 会按它定位），不能撞其他成员的 path/目录名/title
+    const conflict = file.projects.find(p => identityKeys(p).includes(title))
+    if (conflict)
+      throw new SpaceOpError(`显示名「${title}」与现有成员 ${conflict.path} 冲突，请换一个`)
+  }
+
   const absPath = join(root, relPath)
   if (await canonicalize(absPath))
     throw new SpaceOpError(`目标路径已存在：${absPath}（如需纳入请用 unmount 后手工处理）`)
@@ -110,7 +118,6 @@ export async function mountProject(
   }
 
   const project: SpaceProject = { path: relPath }
-  const title = options.title?.trim()
   if (title)
     project.title = title
   file.projects.push(project)
@@ -118,9 +125,14 @@ export async function mountProject(
   return project
 }
 
+/** 成员的身份键：项目引用匹配与 title 冲突校验共用同一组口径，防止两套规则漂移 */
+function identityKeys(project: SpaceProject): string[] {
+  return [project.path, basename(project.path), ...(project.title ? [project.title] : [])]
+}
+
 function findProject(file: SpaceFileData, ref: string): SpaceProject {
   const normalized = normalizeProjectPath(ref)
-  const hit = file.projects.find(p => p.path === normalized || p.title === ref || basename(p.path) === ref)
+  const hit = file.projects.find(p => p.path === normalized || identityKeys(p).includes(ref))
   if (!hit)
     throw new SpaceOpError(`空间中没有项目「${ref}」（现有：${file.projects.map(p => p.path).join('、') || '无'}）`)
   return hit

@@ -85,6 +85,26 @@ describe('mountProject', () => {
     await expect(mountProject(shell, join(outside, 'nope'))).rejects.toThrow('目录不存在')
   })
 
+  it('title 撞其他成员的身份键（目录名/title）被拒绝，且不产生副作用', async () => {
+    await initShell()
+    await fakeClone(shell, 'git@github.com:a/ext.git')
+    const noClone = async (): Promise<void> => {
+      throw new Error('不应执行到 clone')
+    }
+    // 撞目录名：execGit 不应被调用（校验先于副作用）
+    await expect(mountProject(shell, 'git@github.com:a/other.git', { title: 'ext' }, noClone))
+      .rejects
+      .toThrow('显示名「ext」与现有成员 projects/ext 冲突')
+    // 撞既有 title
+    const { loadSpaceFile, saveSpaceFile } = await import('./space-file.ts')
+    const file = await loadSpaceFile(shell)
+    file.projects.find(p => p.path === 'projects/ext')!.title = '专属名'
+    await saveSpaceFile(shell, file)
+    await expect(mountProject(shell, 'git@github.com:a/third.git', { title: '专属名' }, noClone))
+      .rejects
+      .toThrow('冲突')
+  })
+
   it('title 显式传入才写入，缺省则不落字段', async () => {
     await initShell()
     const withTitle = await mountProject(shell, outside, { name: 'ext', title: '外围项目' })

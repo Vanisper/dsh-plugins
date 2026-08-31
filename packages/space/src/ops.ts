@@ -59,16 +59,20 @@ function projectNameFromTarget(target: string): string {
  * - git URL 走 clone，本机目录走 symlink
  * - symlink 成员的真实路径在壳外：workspace-write 模式下写入会被沙盒拒绝（realpath 判定），doctor 会如实报告
  *
+ * @param root 壳根规范路径
+ * @param target git URL 或本机目录路径
+ * @param options.name 壳内目录名（projects/<name>），缺省从 target 推断
+ * @param options.title 显示名，写入 space.yaml；缺省时显示端以目录名兜底
  * @throws {SpaceOpError} 目标已存在、clone 失败或本机目录无效
  */
 export async function mountProject(
   root: string,
   target: string,
-  name?: string,
+  options: { name?: string, title?: string } = {},
   execGit: ExecGit = defaultExecGit,
 ): Promise<SpaceProject> {
   const file = await loadSpaceFile(root)
-  const projectName = name?.trim() || projectNameFromTarget(target)
+  const projectName = options.name?.trim() || projectNameFromTarget(target)
   const relPath = `${PROJECTS_DIR}/${projectName}`
   if (file.projects.some(p => p.path === relPath))
     throw new SpaceOpError(`项目已在空间中：${relPath}`)
@@ -97,6 +101,9 @@ export async function mountProject(
   }
 
   const project: SpaceProject = { path: relPath }
+  const title = options.title?.trim()
+  if (title)
+    project.title = title
   file.projects.push(project)
   await saveSpaceFile(root, file)
   return project

@@ -12,7 +12,7 @@ const USAGE = `用法：
   /space                 查看当前空间状态
   /space init [名称]     把当前目录初始化为多项目空间
   /space doctor          逐项目诊断（存在性、当前沙盒模式下可写性）
-  /space mount <目标> [名称]   挂入项目（git URL 克隆 / 本机目录建链接）
+  /space mount <目标> [名称] [标题]   挂入项目（git URL 克隆 / 本机目录建链接；标题为可选显示名）
   /space unmount <项目>  解除挂载（不删除磁盘文件）
   /space desc <项目> <说明>    设置一句话项目说明
   /space list-known      列出已登记的全部空间`
@@ -83,12 +83,12 @@ async function run(ctx: Context, registry: SpacesRegistry, refresh: RefreshWorks
       return { kind: 'success', text: lines.join('\n') }
     }
     case 'mount': {
-      const [target, name] = rest
+      const [target, name, ...titleParts] = rest
       if (!target)
         return { kind: 'error', text: `缺少目标。\n${USAGE}` }
-      const project = await mountProject(space.root, target, name)
+      const project = await mountProject(space.root, target, { name, title: titleParts.join(' ') || undefined })
       refresh()
-      return { kind: 'success', text: `已挂入 ${project.path}` }
+      return { kind: 'success', text: `已挂入 ${project.path}${project.title ? `（${project.title}）` : ''}` }
     }
     case 'unmount': {
       const [ref] = rest

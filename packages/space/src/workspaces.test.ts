@@ -55,7 +55,7 @@ function pathOf(ws: FakeRegistry, id: string): string {
 describe('registerOneSpace', () => {
   it('登记壳根与成员，成员按 space.yaml 顺序排在壳根之后、既有工作区之前', async () => {
     await initSpace(shell, '空间甲')
-    await mountProject(shell, outside, 'ext')
+    await mountProject(shell, outside, { name: 'ext' })
     const innerReal = join(shell, 'projects', 'inner')
     await mkdir(innerReal, { recursive: true })
     // 手工补一个壳内成员（真实子目录）

@@ -49,6 +49,7 @@ export function registerTool(ctx: Context, registry: SpacesRegistry, refresh: Re
       action: { type: 'string', required: true, description: 'list | init | mount | unmount | setdesc | doctor' },
       target: { type: 'string', description: 'mount 的目标（git URL 或本机目录路径）；unmount/setdesc 的项目引用（path、title 或目录名）' },
       name: { type: 'string', description: '可选：init 的空间名、mount 的项目目录名' },
+      title: { type: 'string', description: '可选：mount 的项目显示名，写入 space.yaml；缺省时显示端以目录名兜底' },
       desc: { type: 'string', description: 'setdesc 的一句话项目说明' },
     },
     output: {
@@ -83,7 +84,7 @@ export function registerTool(ctx: Context, registry: SpacesRegistry, refresh: Re
           case 'mount': {
             if (!args.target)
               return asJson({ ok: false, error: 'mount 需要 target（git URL 或本机目录路径）' })
-            const project = await mountProject(space.root, args.target, args.name)
+            const project = await mountProject(space.root, args.target, { name: args.name, title: args.title })
             refresh()
             return asJson({ ok: true, mounted: project })
           }

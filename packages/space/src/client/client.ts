@@ -27,9 +27,9 @@ const CSS = `
 .dsp-row:hover{background:var(--dsw-alias-bg-layer-2);}
 .dsp-row.current{background:var(--dsw-alias-bg-layer-3);}
 .dsp-dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--dsw-alias-border-l2);}
-.dsp-dot.running{background:var(--dsw-alias-brand-primary);}
-.dsp-dot.pending{background:#f59e0b;}
-.dsp-dot.done{background:#22c55e;}
+.dsp-dot.running{background:var(--dsw-alias-state-business-primary);}
+.dsp-dot.pending{background:var(--dsw-alias-state-warn-primary);}
+.dsp-dot.done{background:var(--dsw-alias-state-success-primary);}
 .dsp-row-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dsp-row-time{font-size:10px;color:var(--dsw-alias-label-secondary);flex:none;}
 .dsp-date{font-size:10.5px;color:var(--dsw-alias-label-secondary);padding:4px 6px 0;}

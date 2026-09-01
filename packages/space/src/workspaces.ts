@@ -62,6 +62,9 @@ export function startWorkspaceRegistration(ctx: Context, store: SpacesStore, log
       log('[dsh-space] workspaceRegistry 尚未就绪，本次登记跳过（服务出现后自动补登）')
       return
     }
+    // 首次绑定时打一行，让「补登成功」在控制台可见（此后重刷静默）
+    if (!bound)
+      log('[dsh-space] workspaceRegistry 已就绪，执行工作区登记')
     bound = ws
     void Promise.allSettled(
       store.list().map(space => registerOneSpace(ws, space, log)),

@@ -31,10 +31,6 @@ dsh plugin --profile web add link:<本仓库路径>/packages/space
 
 安装会把包加入 profile 的 `dsh.profile.bundles`（本包声明了 `dsh.bundle.patch`），重启 dsh 后生效。
 
-## 迁移
-
-壳模式（v0，`space.yaml` + `projects/`）的空间在插件升级后首次启动时自动迁移：壳根成为主成员，`projects/` 成员解析 symlink 为真实路径后并入。迁移后 `space.yaml` 与 `projects/` 下的 symlink 可以自行删除。
-
 ## 边界
 
 - 不 patch、不包装任何核心服务；官方未来若提供多文件夹工作区（deepseek-harness #991），本插件的实体模型与之同构，可平移

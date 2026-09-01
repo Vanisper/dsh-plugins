@@ -1,5 +1,5 @@
 // @env node
-// dsh-space 插件入口：装配 settings 注册表（含壳模式迁移）、space 工具、/space 命令、空间地图上下文与工作区自动登记
+// dsh-space 插件入口：装配 settings 注册表、space 工具、/space 命令、空间地图上下文与工作区自动登记
 import type { Context } from '@deepseek-ai/cordis'
 import { registerCommand } from './command.ts'
 import { PLUGIN_NAME } from './constants.ts'
@@ -16,9 +16,9 @@ export interface DshSpaceConfig {
 export default {
   name: PLUGIN_NAME,
   inject: ['settings', 'tools', 'systemPrompt', 'commands'],
-  async apply(ctx: Context, config: DshSpaceConfig) {
+  apply(ctx: Context, config: DshSpaceConfig) {
     const log = (message: string): void => console.warn(message)
-    const store = await registerSpacesStore(ctx.settings, log)
+    const store = registerSpacesStore(ctx.settings)
     const refresh = config?.registerWorkspaces === false
       ? (): void => {}
       : startWorkspaceRegistration(ctx, store, log)

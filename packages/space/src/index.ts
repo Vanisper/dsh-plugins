@@ -1,29 +1,20 @@
-// @env node
-// dsh-space 插件入口：装配 settings 注册表、space 工具、/space 命令、空间地图上下文与工作区自动登记
+// dsh-space 插件入口：装配 settings 注册表、space 工具、/space 命令与空间地图上下文
+// 两条创建路径（工作区建壳 / 对话静默建目录）都在创建动作里幂等登记核心工作区行并持有
+// id 绑定（id-first 纪律）；除此之外对核心一律只读；sessionId 零持久化（核心账目承载归属）
 import type { Context } from '@deepseek-ai/cordis'
-import { registerCommand } from './command.ts'
-import { PLUGIN_NAME } from './constants.ts'
-import { registerPromptContext } from './prompt.ts'
-import { registerSpacesStore } from './registry.ts'
-import { registerTool } from './tool.ts'
-import { startWorkspaceRegistration } from './workspaces.ts'
-
-export interface DshSpaceConfig {
-  /** 是否把空间成员自动登记为核心 workspace（默认 true） */
-  registerWorkspaces?: boolean
-}
+import { registerCommand } from './host/command.ts'
+import { registerPromptContext } from './host/prompt.ts'
+import { registerTool } from './host/tool.ts'
+import { PLUGIN_NAME } from './shared/constants.ts'
+import { registerSpacesStore } from './store/spaces.ts'
 
 export default {
   name: PLUGIN_NAME,
   inject: ['settings', 'tools', 'systemPrompt', 'commands'],
-  apply(ctx: Context, config: DshSpaceConfig) {
-    const log = (message: string): void => console.warn(message)
+  apply(ctx: Context) {
     const store = registerSpacesStore(ctx.settings)
-    const refresh = config?.registerWorkspaces === false
-      ? (): void => {}
-      : startWorkspaceRegistration(ctx, store, log)
-    registerTool(ctx, store, store.save, refresh)
-    registerCommand(ctx, store, refresh)
+    registerTool(ctx, store)
+    registerCommand(ctx, store)
     registerPromptContext(ctx, store)
   },
 }

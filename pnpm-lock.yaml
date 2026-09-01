@@ -72,9 +72,6 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: catalog:dsh
         version: 3.18.1
-      yaml:
-        specifier: ^2.8.0
-        version: 2.9.0
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: catalog:dsh

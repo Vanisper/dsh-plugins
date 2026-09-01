@@ -2,7 +2,7 @@
   "name": "dsh-space",
   "type": "module",
   "version": "0.1.0",
-  "description": "DSH 多项目空间插件：以「壳工作空间」组织多个项目仓库——space.yaml 载体、空间地图上下文注入、项目自动登记为工作区",
+  "description": "DSH 多项目空间插件：工作区（壳目录 + 多成员注解）与对话（chats/<日期>/ 静默目录）两条创建路径，id-first 工作区绑定与空间地图上下文注入",
   "license": "MIT",
   "keywords": [
     "dsh",
@@ -43,8 +43,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-settings": "catalog:dsh",
     "@deepseek-ai/dsh-tools": "catalog:dsh",
-    "@deepseek-ai/schemastery": "catalog:dsh",
-    "yaml": "^2.8.0"
+    "@deepseek-ai/schemastery": "catalog:dsh"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "catalog:dsh",

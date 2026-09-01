@@ -130,24 +130,6 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       const sessionState = React.useSyncExternalStore(props.services.subSessions, props.services.getSessions)
       const wsState = React.useSyncExternalStore(props.services.subWorkspaces, props.services.getWorkspaces)
 
-      // 诊断（临时）：pending/completed 状态位是否真的到达列表行。
-      // 若应出现琥珀/绿的场景里控制台始终没有这条日志，说明服务端的运行时
-      // 管线本就不投递状态位（官方侧边栏同样看不到），问题不在我们的渲染
-      const flagKey = sessionState.ids.filter((id) => {
-        const row = sessionState.byId[id]
-        return Boolean(row) && (row!.pendingInteraction !== undefined || row!.completed === true)
-      }).join(',')
-      React.useEffect(() => {
-        if (!flagKey)
-          return () => {}
-        const detail = flagKey.split(',').map((id) => {
-          const row = sessionState.byId[id]!
-          return `${id}: pending=${String(row.pendingInteraction)} completed=${String(row.completed)} running=${String(row.running)}`
-        }).join(' | ')
-        console.warn('[dsh-space] 状态位出现：', detail)
-        return () => {}
-      }, [flagKey])
-
       React.useEffect(() => {
         let alive = true
         fetch('/api/dsh-space/registry')

@@ -83,8 +83,10 @@ const clientInject = ['slots']
         return () => style.remove()
       }, 'dsh-space: sidebar styles')
 
+      // single 插槽顶替规则：默认 priority 0 会与官方注册撞车（fail-loud），
+      // 显式更低值参与选举，lowest renders——官方浏览器被我们遮蔽
       slots.inject('sidebar.workspaces', () => slots.register(
-        { name: 'sidebar.workspaces' },
+        { name: 'sidebar.workspaces', priority: -10 },
         SpaceSidebar,
       ))
     }

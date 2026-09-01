@@ -50,6 +50,10 @@ DSH 多项目空间插件。两条创建路径、两类实体：
 - **模型工具 `space`**：`list` / `create` / `attach` / `detach` / `primary` / `title` / `desc` / `doctor` / `chat` / `chatdrop` / `drop`
 - **用户命令 `/space`**：同上子命令 + `status`
 - **上下文注入**：cwd 落在空间的有效路径子树内时，系统上下文自动附带空间地图（入口目录 + 成员 + 沙盒约束提示）
+- **浏览器侧 HTTP API**（web profile；未来客户端侧边栏的数据面）：
+  - `GET /api/dsh-space/registry` → `{root, spaces（含预算 effectivePath）, chats}`
+  - `POST /api/dsh-space/resolve` `{paths: string[]}` → 批量 cwd 认领（canonicalize + 子树包含，宽松识别）
+  - `POST /api/dsh-space/ops` `{op, …}` → `create-space | attach | detach | primary | chat | chatdrop | drop`，与工具/命令共用域函数
 
 ## 读写语义
 

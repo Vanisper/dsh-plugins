@@ -1,11 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { SpacesStore } from '../store/spaces.ts'
-import { bindChatWorkspaceId, createChat, dropChat } from '../domain/chats.ts'
+import { bindChatWorkspaceId, createChat, dropChat, findChat } from '../domain/chats.ts'
 import { resolveAllByCwd } from '../domain/resolve.ts'
 import { attachFolder, bindWorkspaceId, createSpace, detachFolder, dropSpace, effectivePath, findSpace, setPrimary } from '../domain/space.ts'
 import { canonicalize } from '../shared/fs-path.ts'
-import { registerCoreWorkspace } from './core-workspace.ts'
+import { coreRows, registerCoreWorkspace } from './core-workspace.ts'
 
 // ============================================================
 // 浏览器侧 HTTP API（未来客户端侧边栏的数据面）
@@ -117,6 +117,40 @@ export async function dispatchOp(ctx: Context, store: SpacesStore, body: Record<
       const result = await dropChat(chats, ref)
       await store.save(data, result.data)
       return { dropped: result.chat.path }
+    }
+    case 'rebind': {
+      // 按需治愈：绑定行还在→原样返回；查无此行→按路径幂等重建（悬空是正常表现）
+      // 注意只治愈「行不在」；行在但 path 不符属 B 类错位，只报告不自动重接
+      const rows = coreRows(ctx)
+      const chatRef = str('chat')
+      if (chatRef) {
+        const chatsNow = store.listChats()
+        const chat = await findChat(chatsNow, chatRef)
+        if (chat.workspaceId && rows?.some(row => row.id === chat.workspaceId))
+          return { workspaceId: chat.workspaceId, healed: false }
+        const slug = chat.path.split('/').pop() ?? chat.path
+        const workspaceId = await registerCoreWorkspace(ctx, chat.path, slug, warn)
+        if (!workspaceId)
+          throw new Error('核心登记失败（workspaceRegistry 未就绪）')
+        const bound = bindChatWorkspaceId(chatsNow, chat.path, workspaceId)
+        await store.save(data, bound.data)
+        return { workspaceId, healed: true }
+      }
+      const spaceRef = str('space')
+      if (!spaceRef)
+        throw new Error('rebind 需要 space 或 chat')
+      const space = findSpace(data, spaceRef)
+      if (space.workspaceId && rows?.some(row => row.id === space.workspaceId))
+        return { workspaceId: space.workspaceId, healed: false }
+      const effective = effectivePath(space)
+      if (!effective)
+        throw new Error(`空间「${space.name}」没有有效路径，无法登记`)
+      const workspaceId = await registerCoreWorkspace(ctx, effective, space.name, warn)
+      if (!workspaceId)
+        throw new Error('核心登记失败（workspaceRegistry 未就绪）')
+      const bound = bindWorkspaceId(data, space.name, workspaceId)
+      await store.save(bound.data, chats)
+      return { workspaceId, healed: true }
     }
     case 'drop': {
       const space = str('space')

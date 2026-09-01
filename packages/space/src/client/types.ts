@@ -48,6 +48,10 @@ export interface SessionRow {
   blank: boolean
   updatedAt: number
   origin?: 'subagent'
+  /** 用户交互阻塞中（琥珀点） */
+  pendingInteraction?: unknown
+  /** 完成未读提醒（绿点） */
+  completed?: boolean
 }
 
 /** sessions 服务的最小投影 */

@@ -28,6 +28,8 @@ const CSS = `
 .dsp-row.current{background:var(--dsw-alias-bg-layer-3);}
 .dsp-dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--dsw-alias-border-l2);}
 .dsp-dot.running{background:var(--dsw-alias-brand-primary);}
+.dsp-dot.pending{background:#f59e0b;}
+.dsp-dot.done{background:#22c55e;}
 .dsp-row-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dsp-row-time{font-size:10px;color:var(--dsw-alias-label-secondary);flex:none;}
 .dsp-date{font-size:10.5px;color:var(--dsw-alias-label-secondary);padding:4px 6px 0;}
@@ -233,7 +235,29 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       }, [claimKey])
 
       const el = (tag: string, attrs: Record<string, unknown> | null, ...children: ReactNode[]): ReactNode => React.createElement(tag, attrs, ...children)
-      const open = sessions.open
+      const open = (id: string): void => sessions.open(id)
+
+      /**
+           新会话入口（id-first + 按需治愈）：绑定行在列表中→直接开；
+          列表已加载却查无此行→悬空，POST rebind 幂等重建后用新 id 开
+       */
+      const startIn = (boundId: string | undefined, rebindArg: Record<string, unknown>): void => {
+        if (!boundId)
+          return
+        const known = wsState.items.length === 0 || wsState.items.some(item => item.workspaceId === boundId)
+        if (known) {
+          workspaces.startSession(boundId)
+          return
+        }
+        void apiPost('/api/dsh-space/ops', { op: 'rebind', ...rebindArg })
+          .then((result) => {
+            const workspaceId = (result as { workspaceId?: string }).workspaceId
+            if (workspaceId)
+              workspaces.startSession(workspaceId)
+            setState(prev => ({ ...prev, version: prev.version + 1 }))
+          })
+          .catch((error: unknown) => console.warn('[dsh-space] rebind 失败', error))
+      }
 
       if (state.status === 'loading')
         return el('div', { className: 'dsp-side' }, '加载 dsh-space 注册表…')
@@ -282,7 +306,7 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       }
 
       const spaceCards = registry!.spaces.map(space => el('div', { key: space.id, className: 'dsp-space' }, el('div', { className: 'dsp-space-head' }, el('span', { className: 'dsp-space-name' }, space.name), el('span', { className: 'dsp-badge' }, space.workspaceId ? '已绑定' : '未绑定'), space.workspaceId
-        ? el('button', { className: 'dsp-go', onClick: () => workspaces.startSession(space.workspaceId) }, '新会话')
+        ? el('button', { className: 'dsp-go', onClick: () => startIn(space.workspaceId, { space: space.name }) }, '新会话')
         : null), el('div', { className: 'dsp-meta' }, `${space.folders.length} 成员 · ${space.effectivePath ?? '无有效路径'}`), ...(buckets.spaceRows.get(space.id) ?? []).map(session => SessionRowItem({ session, current: session.id === sessionState.current, open }))))
 
       // 对话按日期分组
@@ -296,7 +320,7 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       const chatBlocks = [...chatGroups.entries()].flatMap(([date, list]) => [
         el('div', { key: `d-${date}`, className: 'dsp-date' }, date),
         ...list.map(chat => el('div', { key: chat.path, className: 'dsp-chat' }, el('div', { className: 'dsp-chat-head' }, el('span', { className: 'dsp-chat-name' }, tailOf(chat.path).slug), el('span', { className: 'dsp-badge' }, chat.workspaceId ? '' : '未绑定'), chat.workspaceId
-          ? el('button', { className: 'dsp-go', onClick: () => workspaces.startSession(chat.workspaceId) }, '开会话')
+          ? el('button', { className: 'dsp-go', onClick: () => startIn(chat.workspaceId, { chat: chat.path }) }, '开会话')
           : null), ...(buckets.chatRows.get(chat.path) ?? []).map(session => SessionRowItem({ session, current: session.id === sessionState.current, open })))),
       ])
 

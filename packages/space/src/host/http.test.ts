@@ -13,21 +13,26 @@ let saved: { spaces: unknown[], chats: unknown[] }
 let store: SpacesStore
 let fakeCtx: Context
 let registryCalls: { path: string, title?: string }[]
+let registryRows: { id: string, path: string }[]
 
 beforeEach(async () => {
   root = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-http-root-'))))!
   dirA = (await canonicalize(await mkdtemp(join(tmpdir(), 'dsh-space-http-a-'))))!
   saved = { spaces: [], chats: [] }
   registryCalls = []
+  registryRows = []
   fakeCtx = {
-    // 最小结构投影：dispatchOp 只经 registerCoreWorkspace 触到这里
+    // 最小结构投影：create 与 list 都被 rebind/heal 链路使用
     get: (name: string) => {
       if (name === 'workspaceRegistry') {
         return {
           create: async (path: string, title?: string) => {
             registryCalls.push({ path, title })
-            return { id: `ws-${registryCalls.length}` }
+            const row = { id: `ws-${registryCalls.length}`, path }
+            registryRows.push(row)
+            return row
           },
+          list: () => registryRows,
         }
       }
       return undefined
@@ -80,6 +85,24 @@ describe('dispatchOp（HTTP ops 与工具/命令同域函数）', () => {
   it('域错误以异常抛出（handler 统一转 400）', async () => {
     await expect(dispatchOp(fakeCtx, store, { op: 'create-space' })).rejects.toThrow('name')
     await expect(dispatchOp(fakeCtx, store, { op: 'nope' })).rejects.toThrow('未知 op')
+  })
+
+  it('rebind（按需治愈）：行在→原样；行删→幂等重建并更新绑定', async () => {
+    await dispatchOp(fakeCtx, store, { op: 'create-space', name: '甲' })
+    // 行在：原样返回，不新增登记
+    const healthy = await dispatchOp(fakeCtx, store, { op: 'rebind', space: '甲' })
+    expect(healthy).toMatchObject({ workspaceId: 'ws-1', healed: false })
+    // 模拟用户在核心 UI 删行 → 悬空
+    registryRows.length = 0
+    const healed = await dispatchOp(fakeCtx, store, { op: 'rebind', space: '甲' })
+    expect(healed).toMatchObject({ healed: true })
+    const savedSpace = (saved.spaces as Array<{ workspaceId?: string }>)[0]
+    expect(savedSpace?.workspaceId).toBe(healed.workspaceId)
+    // 对话同理
+    await dispatchOp(fakeCtx, store, { op: 'chat', name: '临时' })
+    registryRows.length = 0
+    const healedChat = await dispatchOp(fakeCtx, store, { op: 'rebind', chat: '临时' })
+    expect(healedChat).toMatchObject({ healed: true })
   })
 
   it('drop/chatdrop 只删记录', async () => {

@@ -105,6 +105,17 @@ describe('dispatchOp（HTTP ops 与工具/命令同域函数）', () => {
     expect(healedChat).toMatchObject({ healed: true })
   })
 
+  it('reorder-spaces：重排数组即重排展示序；集合不一致拒绝', async () => {
+    await dispatchOp(fakeCtx, store, { op: 'create-space', name: '甲' })
+    await dispatchOp(fakeCtx, store, { op: 'create-space', name: '乙' })
+    const ids = (saved.spaces as Array<{ id: string, name: string }>).map(s => s.id)
+    const reversed = [...ids].reverse()
+    const result = await dispatchOp(fakeCtx, store, { op: 'reorder-spaces', ids: reversed })
+    expect(result).toMatchObject({ reordered: 2 })
+    expect((saved.spaces as Array<{ name: string }>).map(s => s.name)).toEqual(['乙', '甲'])
+    await expect(dispatchOp(fakeCtx, store, { op: 'reorder-spaces', ids: [ids[0]] })).rejects.toThrow('不一致')
+  })
+
   it('drop/chatdrop 只删记录', async () => {
     await dispatchOp(fakeCtx, store, { op: 'create-space', name: '甲' })
     await dispatchOp(fakeCtx, store, { op: 'chat', name: '临时' })

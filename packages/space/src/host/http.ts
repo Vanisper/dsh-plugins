@@ -152,6 +152,17 @@ export async function dispatchOp(ctx: Context, store: SpacesStore, body: Record<
       await store.save(bound.data, chats)
       return { workspaceId, healed: true }
     }
+    case 'reorder-spaces': {
+      // 拖拽排序：ids 必须与现有空间集合完全一致（防止部分覆盖丢数据）
+      const ids = Array.isArray(body.ids) ? body.ids.map(item => String(item)) : null
+      if (!ids || ids.length === 0)
+        throw new Error('reorder-spaces 需要 ids（全部空间 id 的目标顺序）')
+      const byId = new Map(data.map(space => [space.id, space]))
+      if (ids.length !== data.length || ids.some(id => !byId.has(id)))
+        throw new Error(`ids 与现有空间集合不一致（现有 ${data.length} 个）`)
+      await store.save(ids.map(id => byId.get(id)!), chats)
+      return { reordered: ids.length }
+    }
     case 'drop': {
       const space = str('space')
       if (!space)

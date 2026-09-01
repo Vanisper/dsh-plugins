@@ -4,7 +4,7 @@ export type ReactNode = unknown
 /** require('react') 返回的最小投影（P3 用到这五件） */
 export interface ReactLike {
   createElement: (type: string, props: Record<string, unknown> | null, ...children: ReactNode[]) => ReactNode
-  useState: <T>(initial: T) => [T, (value: T | ((prev: T) => T)) => void]
+  useState: <T>(initial: T | (() => T)) => [T, (value: T | ((prev: T) => T)) => void]
   useEffect: (effect: () => () => void, deps?: unknown[]) => void
   useMemo: <T>(factory: () => T, deps: unknown[]) => T
   useSyncExternalStore: <T>(subscribe: (onStoreChange: () => void) => () => void, getSnapshot: () => T) => T

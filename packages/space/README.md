@@ -50,10 +50,14 @@ DSH 多项目空间插件。两条创建路径、两类实体：
 - **模型工具 `space`**：`list` / `create` / `attach` / `detach` / `primary` / `title` / `desc` / `doctor` / `chat` / `chatdrop` / `drop`
 - **用户命令 `/space`**：同上子命令 + `status`
 - **上下文注入**：cwd 落在空间的有效路径子树内时，系统上下文自动附带空间地图（入口目录 + 成员 + 沙盒约束提示）
-- **浏览器侧 HTTP API**（web profile；未来客户端侧边栏的数据面）：
+- **客户端侧边栏**：接管官方 `sidebar.workspaces` 区域（single 插槽顶替，卸载即还原）——
+  工作区卡片（名称/绑定徽标/折叠记忆/成员区/设主/摘除/拖拽排序）+ 对话区（chats 按日期分组）+ 未归组杂项；
+  会话行三态状态点（等待交互/运行中/完成未读），点击跳转；内联创建表单（工作区带原生目录选择器与 ref/link 切换，对话建目录即开会话）
+- **逃生门**：`localStorage['dsh-space.sidebar.off'] = '1'` 后刷新即还原官方侧边栏，清除该键恢复
+- **浏览器侧 HTTP API**（web profile；客户端侧边栏的数据面）：
   - `GET /api/dsh-space/registry` → `{root, spaces（含预算 effectivePath）, chats}`
   - `POST /api/dsh-space/resolve` `{paths: string[]}` → 批量 cwd 认领（canonicalize + 子树包含，宽松识别）
-  - `POST /api/dsh-space/ops` `{op, …}` → `create-space | attach | detach | primary | chat | chatdrop | drop`，与工具/命令共用域函数
+  - `POST /api/dsh-space/ops` `{op, …}` → `create-space | attach | detach | primary | chat | chatdrop | drop | rebind | reorder-spaces`，与工具/命令共用域函数；`rebind` 为按需治愈（悬空重建绑定），`reorder-spaces` 为拖拽排序落库
 
 ## 读写语义
 

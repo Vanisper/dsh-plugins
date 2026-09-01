@@ -93,10 +93,22 @@ const clientInject = ['slots', 'sessions', 'workspaces']
 
     const React = require('react') as ReactLike
 
-    /** 会话行（含跳转） */
+    /** 状态点（官方语义色）：等待交互（warn）＞运行中（business）＞完成未读（success）＞空闲（灰） */
+    function dotState(session: SessionRow): { cls: string, label: string } {
+      if (session.pendingInteraction)
+        return { cls: ' pending', label: '等待你的交互' }
+      if (session.running)
+        return { cls: ' running', label: '运行中' }
+      if (session.completed)
+        return { cls: ' done', label: '已完成（未读）' }
+      return { cls: '', label: '空闲' }
+    }
+
+    /** 会话行（含跳转；open 必须经闭包调用——解构成裸函数会丢 this） */
     function SessionRowItem(props: { session: SessionRow, current: boolean, open: (id: string) => void }): ReactNode {
       const { session, current, open } = props
-      return React.createElement('div', { className: `dsp-row${current ? ' current' : ''}`, key: session.id, onClick: () => open(session.id), title: session.cwd ?? session.id }, React.createElement('span', { className: `dsp-dot${session.running ? ' running' : ''}` }), React.createElement('span', { className: 'dsp-row-title' }, session.displayTitle), React.createElement('span', { className: 'dsp-row-time' }, fmtTime(session.updatedAt)))
+      const dot = dotState(session)
+      return React.createElement('div', { className: `dsp-row${current ? ' current' : ''}`, key: session.id, onClick: () => open(session.id), title: `${dot.label} · ${session.cwd ?? session.id}` }, React.createElement('span', { className: `dsp-dot${dot.cls}`, title: dot.label }), React.createElement('span', { className: 'dsp-row-title' }, session.displayTitle), React.createElement('span', { className: 'dsp-row-time' }, fmtTime(session.updatedAt)))
     }
 
     interface StableServices {
@@ -117,6 +129,24 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       // 订阅句柄来自注册工厂闭包：引用稳定，避免每 render 重订阅的 churn
       const sessionState = React.useSyncExternalStore(props.services.subSessions, props.services.getSessions)
       const wsState = React.useSyncExternalStore(props.services.subWorkspaces, props.services.getWorkspaces)
+
+      // 诊断（临时）：pending/completed 状态位是否真的到达列表行。
+      // 若应出现琥珀/绿的场景里控制台始终没有这条日志，说明服务端的运行时
+      // 管线本就不投递状态位（官方侧边栏同样看不到），问题不在我们的渲染
+      const flagKey = sessionState.ids.filter((id) => {
+        const row = sessionState.byId[id]
+        return Boolean(row) && (row!.pendingInteraction !== undefined || row!.completed === true)
+      }).join(',')
+      React.useEffect(() => {
+        if (!flagKey)
+          return () => {}
+        const detail = flagKey.split(',').map((id) => {
+          const row = sessionState.byId[id]!
+          return `${id}: pending=${String(row.pendingInteraction)} completed=${String(row.completed)} running=${String(row.running)}`
+        }).join(' | ')
+        console.warn('[dsh-space] 状态位出现：', detail)
+        return () => {}
+      }, [flagKey])
 
       React.useEffect(() => {
         let alive = true

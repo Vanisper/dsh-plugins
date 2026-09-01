@@ -49,16 +49,20 @@ export type RefreshWorkspaces = () => void
 /**
  * 启动工作区自动登记，并返回可手动触发重刷的函数
  *
- * @description 触发时机：启动一次 + 注册表每次变化（登记幂等，重跑无副作用）；
- * 返回的 refresh 同时交给工具/命令适配器，在 create/attach/detach 后即时调用
+ * @description
+ * 触发时机：启动一次 + 注册表每次变化 + workspaceRegistry 服务出现时（登记幂等，重跑无副作用）。
+ * 服务就绪与插件 apply 存在时序竞争（上次启动能拿到不代表这次能），
+ * 因此不做 apply 期快照，而是每次调用时惰性解析、并订阅 internal/service 补登
  */
 export function startWorkspaceRegistration(ctx: Context, store: SpacesStore, log: Logger): RefreshWorkspaces {
-  const ws = ctx.get('workspaceRegistry')
-  if (!ws) {
-    log('[dsh-space] workspaceRegistry 不可用（非 web profile？），跳过工作区自动登记')
-    return () => {}
-  }
+  let bound: WorkspaceRegistry | undefined
   const refresh = (): void => {
+    const ws = bound ?? ctx.get('workspaceRegistry')
+    if (!ws) {
+      log('[dsh-space] workspaceRegistry 尚未就绪，本次登记跳过（服务出现后自动补登）')
+      return
+    }
+    bound = ws
     void Promise.allSettled(
       store.list().map(space => registerOneSpace(ws, space, log)),
     ).then((results) => {
@@ -68,6 +72,10 @@ export function startWorkspaceRegistration(ctx: Context, store: SpacesStore, log
       }
     })
   }
+  ctx.on('internal/service', (name) => {
+    if (name === 'workspaceRegistry')
+      refresh()
+  })
   refresh()
   store.watch(refresh)
   return refresh

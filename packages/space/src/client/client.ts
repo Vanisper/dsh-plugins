@@ -97,20 +97,24 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       return React.createElement('div', { className: `dsp-row${current ? ' current' : ''}`, key: session.id, onClick: () => open(session.id), title: session.cwd ?? session.id }, React.createElement('span', { className: `dsp-dot${session.running ? ' running' : ''}` }), React.createElement('span', { className: 'dsp-row-title' }, session.displayTitle), React.createElement('span', { className: 'dsp-row-time' }, fmtTime(session.updatedAt)))
     }
 
-    function SpaceSidebar(props: { services: { sessions: SessionsLike, workspaces: WorkspacesLike } }): ReactNode {
+    interface StableServices {
+      sessions: SessionsLike
+      workspaces: WorkspacesLike
+      subSessions: (cb: () => void) => () => void
+      getSessions: () => SessionsLike['list']['getSnapshot'] extends () => infer T ? T : never
+      subWorkspaces: (cb: () => void) => () => void
+      getWorkspaces: () => WorkspacesLike['list']['getSnapshot'] extends () => infer T ? T : never
+    }
+
+    function SpaceSidebar(props: { services: StableServices }): ReactNode {
       const { sessions, workspaces } = props.services
       const [state, setState] = React.useState<SideState>({ status: 'loading', version: 0 })
       // 宽松认领：cwd → 首个命中空间 id（仅对未被绑定行认领的会话）
       const [claimMap, setClaimMap] = React.useState<Record<string, string>>({})
 
-      const sessionState = React.useSyncExternalStore(
-        (cb: () => void) => sessions.list.subscribe(cb),
-        () => sessions.list.getSnapshot(),
-      )
-      const wsState = React.useSyncExternalStore(
-        (cb: () => void) => workspaces.list.subscribe(cb),
-        () => workspaces.list.getSnapshot(),
-      )
+      // 订阅句柄来自注册工厂闭包：引用稳定，避免每 render 重订阅的 churn
+      const sessionState = React.useSyncExternalStore(props.services.subSessions, props.services.getSessions)
+      const wsState = React.useSyncExternalStore(props.services.subWorkspaces, props.services.getWorkspaces)
 
       React.useEffect(() => {
         let alive = true
@@ -195,22 +199,32 @@ const clientInject = ['slots', 'sessions', 'workspaces']
         return { spaceRows, chatRows, misc, unclaimedCwds: [...new Set(unclaimedCwds)] }
       }, [registry, sessionState, wsState, claimMap])
 
-      // 未认领 cwd 集合变化时批量 resolve
+      // 未认领 cwd 集合变化时批量 resolve；认领 map 合并语义——只覆写本次
+      // 实际解析的路径，保留其余旧认领。整体替换会造成振荡：被认领的 cwd
+      // 不再进未认领集合 → 下次解析集合变小 → 空结果把旧认领抹掉 → 又回到
+      // 未认领 → /resolve 无限往返、列表反复重算闪动
       const claimKey = buckets.unclaimedCwds.join('\n')
       React.useEffect(() => {
         if (!claimKey)
           return () => {}
+        const paths = claimKey.split('\n')
         let alive = true
-        apiPost('/api/dsh-space/resolve', { paths: claimKey.split('\n') })
+        apiPost('/api/dsh-space/resolve', { paths })
           .then((data) => {
             if (!alive)
               return
-            const next: Record<string, string> = {}
-            for (const item of (data.results as ResolveResult[] | undefined) ?? []) {
-              if (item.spaceIds.length > 0)
-                next[item.input] = item.spaceIds[0]!
-            }
-            setClaimMap(next)
+            const results = (data.results as ResolveResult[] | undefined) ?? []
+            setClaimMap((prev) => {
+              // 合并语义：只覆写本次实际解析的路径，其余旧认领原样保留
+              const next = { ...prev }
+              for (const item of results) {
+                if (item.spaceIds.length > 0)
+                  next[item.input] = item.spaceIds[0]!
+                else
+                  delete next[item.input]
+              }
+              return next
+            })
           })
           .catch(() => {})
         return () => {
@@ -307,11 +321,20 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       }, 'dsh-space: sidebar styles')
 
       // single 插槽顶替规则：默认 priority 0 会与官方注册撞车（fail-loud），
-      // 显式更低值参与选举，lowest renders——官方浏览器被我们遮蔽
-      slots.inject('sidebar.workspaces', () => slots.register(
-        { name: 'sidebar.workspaces', priority: -10 },
-        () => SpaceSidebar({ services: { sessions: ctx.get('sessions') as SessionsLike, workspaces: ctx.get('workspaces') as WorkspacesLike } }),
-      ))
+      // 显式更低值参与选举，lowest renders——官方浏览器被我们遮蔽。
+      // 订阅句柄在工厂闭包内构造一次：引用稳定，uSES 不因换引用重订阅
+      slots.inject('sidebar.workspaces', () => {
+        const sessions = ctx.get('sessions') as SessionsLike
+        const workspaces = ctx.get('workspaces') as WorkspacesLike
+        const subSessions = (cb: () => void): (() => void) => sessions.list.subscribe(cb)
+        const getSessions = (): ReturnType<typeof sessions.list.getSnapshot> => sessions.list.getSnapshot()
+        const subWorkspaces = (cb: () => void): (() => void) => workspaces.list.subscribe(cb)
+        const getWorkspaces = (): ReturnType<typeof workspaces.list.getSnapshot> => workspaces.list.getSnapshot()
+        return slots.register(
+          { name: 'sidebar.workspaces', priority: -10 },
+          () => SpaceSidebar({ services: { sessions, workspaces, subSessions, getSessions, subWorkspaces, getWorkspaces } }),
+        )
+      })
     }
 
     exports.apply = apply

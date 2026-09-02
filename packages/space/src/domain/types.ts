@@ -17,15 +17,15 @@ export interface SpaceFolder {
 }
 
 /**
- * 多项目空间实体（「工作区」）
+ * settings 中可读到的工作区记录
  *
- * @description 建立路径就是建立壳目录；工作区允许多目录——壳为物理入口，
- * 成员是提示词语义上的扩展。sessionId 零持久化：会话归属永远运行时解析
+ * @description `shell` / `workspaceId` 仅允许旧版本存量缺省；初始化迁移完成后，
+ * 正常运行代码只接触 {@link SpaceEntity}
  */
-export interface SpaceEntity {
+export interface StoredSpaceEntity {
   id: string
   name: string
-  /** 托管壳目录的规范绝对路径（创建即建目录；旧数据可无） */
+  /** 托管壳目录的规范绝对路径 */
   shell?: string
   /** 主成员的 path：纯字段标记，不联动排序（排序是前端演出，不是数据不变量） */
   primary?: string
@@ -41,6 +41,17 @@ export interface SpaceEntity {
 }
 
 /**
+ * 多项目工作区
+ *
+ * @description 壳目录是固定的核心工作区入口，成员只是附加语义；
+ * `primary` 的变化不得改变核心绑定、会话归组或 cwd
+ */
+export interface SpaceEntity extends StoredSpaceEntity {
+  shell: string
+  workspaceId: string
+}
+
+/**
  * 对话实体
  *
  * @description 「对话」的建立路径：静默在 chats/<本地日期>/ 下建目录——
@@ -48,11 +59,22 @@ export interface SpaceEntity {
  * 与工作区壳对称：建目录、登记核心工作区行、进注册表。
  * 会话本身仍零记录——哪个会话属于哪个对话由绑定行的 sessionIds 承载（核心账目）
  */
-export interface ChatEntity {
+export interface StoredChatEntity {
   /** 对话目录的规范绝对路径（chats/<日期>/<slug>） */
   path: string
   /** 核心工作区行绑定（id-first；建目录时登记取得） */
   workspaceId?: string
+}
+
+/** 已完成核心登记的对话工作区 */
+export interface ChatEntity extends StoredChatEntity {
+  workspaceId: string
+}
+
+/** 插件运行时的完整注册表快照 */
+export interface SpaceRegistry {
+  spaces: SpaceEntity[]
+  chats: ChatEntity[]
 }
 
 export type FolderHealth = 'ok' | 'missing'

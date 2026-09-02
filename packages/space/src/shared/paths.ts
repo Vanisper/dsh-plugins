@@ -1,12 +1,16 @@
 import { mkdir, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { CHATS_DIR, SPACES_DIR } from './constants.ts'
 
 /** 托管根解析：设置项优先，缺省 ~/Documents/dsh */
 export function resolveRoot(configured: string | undefined): string {
   const trimmed = configured?.trim()
-  return trimmed || join(homedir(), 'Documents', 'dsh')
+  if (!trimmed)
+    return join(homedir(), 'Documents', 'dsh')
+  if (!isAbsolute(trimmed))
+    throw new Error(`托管根必须是绝对路径：${trimmed}`)
+  return resolve(trimmed)
 }
 
 export function spacesDir(root: string): string {
@@ -22,8 +26,16 @@ export function assertFsSafeName(name: string): string {
   const trimmed = name.trim()
   if (!trimmed)
     throw new Error('名称不能为空')
-  if (/[/\\]/.test(trimmed) || trimmed.startsWith('.') || /[ -]/.test(trimmed))
+  if (/[/\\\0]/.test(trimmed) || trimmed.startsWith('.') || /\s/.test(trimmed))
     throw new Error(`名称含非法字符：${name}`)
+  return trimmed
+}
+
+/** 校验值只能作为一个普通路径段，不能逃逸父目录 */
+export function assertSafePathSegment(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed || trimmed === '.' || trimmed === '..' || /[/\\\0]/.test(trimmed) || isAbsolute(trimmed))
+    throw new Error(`链接名不是安全的单段名称：${name}`)
   return trimmed
 }
 

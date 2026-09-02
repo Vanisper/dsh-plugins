@@ -1,51 +1,59 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { CoreWorkspaceRow } from '../domain/doctor.ts'
-import type { Logger } from '../shared/log.ts'
 
-// ============================================================
-// 与核心 workspaceRegistry 的唯一接触面（结构性类型，不加包依赖）
-// ------------------------------------------------------------
-// id-first 纪律：create 是幂等 create-or-get（同 path 返回既有行），
-// 返回的 id 即绑定；path 只在审计时经 id 查出做一致性比对。
-// 两个调用方：建壳时登记（工作区）、建对话目录时登记（对话）
-// ============================================================
-
-/** workspaceRegistry 的最小结构投影 */
-interface WorkspaceRegistryLike {
-  create: (path: string, title?: string) => Promise<{ id: string }>
-  list: () => { id: string, path: string }[]
+/** 插件实际依赖的核心工作区投影 */
+export interface CoreWorkspaceView {
+  id: string
+  path: string
+  title: string
+  sessionIds: string[]
 }
 
-function registryOf(ctx: Context): WorkspaceRegistryLike | undefined {
-  try {
-    return ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
-  }
-  catch {
-    return undefined
+interface WorkspaceLike {
+  id: string
+  path: string
+  title: string
+  sessionIds: readonly string[]
+}
+
+interface WorkspaceRegistryLike {
+  create: (path: string, title?: string) => Promise<WorkspaceLike>
+  get: (id: string) => WorkspaceLike | undefined
+  list: () => WorkspaceLike[]
+}
+
+/** 核心 workspaceRegistry 的 Host 侧 adapter */
+export interface CoreWorkspaceAdapter {
+  ensure: (path: string, title: string) => Promise<CoreWorkspaceView>
+  get: (id: string) => CoreWorkspaceView | undefined
+  list: () => CoreWorkspaceView[]
+}
+
+function project(row: WorkspaceLike): CoreWorkspaceView {
+  return {
+    id: String(row.id),
+    path: row.path,
+    title: row.title,
+    sessionIds: [...row.sessionIds].map(String),
   }
 }
 
 /**
- * 把单个目录幂等登记为 dsh 原生工作区，返回行 id
+ * 建立核心工作区 adapter
  *
- * @description 服务未就绪或失败时记日志返回 undefined——绑定留空由 doctor 报「未绑定」，不阻塞创建
+ * @description dsh-space 的创建流程要求核心登记必定成功，因此服务缺失直接失败，
+ * 不再制造无绑定附加记录
  */
-export async function registerCoreWorkspace(ctx: Context, path: string, title: string, log: Logger): Promise<string | undefined> {
-  const ws = registryOf(ctx)
-  if (!ws) {
-    log('[dsh-space] workspaceRegistry 尚未就绪，未登记工作区')
-    return undefined
-  }
-  try {
-    return (await ws.create(path, title)).id
-  }
-  catch (error) {
-    log(`[dsh-space] 工作区登记失败（${path}）：${(error as Error).message}`)
-    return undefined
-  }
-}
+export function createCoreWorkspaceAdapter(ctx: Context): CoreWorkspaceAdapter {
+  const registry = ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
+  if (!registry)
+    throw new Error('workspaceRegistry 未就绪，dsh-space 无法启动')
 
-/** 核心注册表快照（id + path）；服务不可用时返回 undefined，审计降级 */
-export function coreRows(ctx: Context): CoreWorkspaceRow[] | undefined {
-  return registryOf(ctx)?.list().map(({ id, path }) => ({ id, path }))
+  return {
+    ensure: async (path, title) => project(await registry.create(path, title)),
+    get: (id) => {
+      const row = registry.get(id)
+      return row ? project(row) : undefined
+    },
+    list: () => registry.list().map(project),
+  }
 }

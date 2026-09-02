@@ -8,8 +8,8 @@ import type { FolderStatus, SpaceEntity, SpaceFolder } from './types.ts'
 import { lstat, rm, stat, symlink } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { SHELL_PROJECTS_DIR } from '../shared/constants.ts'
-import { canonicalize } from '../shared/fs-path.ts'
-import { assertFsSafeName, ensureDir, spacesDir } from '../shared/paths.ts'
+import { canonicalize, isUnder } from '../shared/fs-path.ts'
+import { assertFsSafeName, assertSafePathSegment } from '../shared/paths.ts'
 
 /** 空间操作的预期内失败（名称冲突、目录无效等），message 直接面向调用者 */
 export class SpaceOpError extends Error {
@@ -38,9 +38,11 @@ export function findSpace(data: SpaceEntity[], ref: string): SpaceEntity {
  * @description 依次尝试精确路径、title、目录名；都不中且引用像路径时，canonicalize 后再比一次
  */
 export async function findFolder(space: SpaceEntity, ref: string): Promise<SpaceFolder> {
-  const syncHit = space.folders.find(folder => folderIdentityKeys(folder).includes(ref))
-  if (syncHit)
-    return syncHit
+  const syncHits = space.folders.filter(folder => folderIdentityKeys(folder).includes(ref))
+  if (syncHits.length === 1)
+    return syncHits[0]!
+  if (syncHits.length > 1)
+    throw new SpaceOpError(`成员引用「${ref}」命中多个目录（${syncHits.map(folder => folder.path).join('、')}），请使用完整路径`)
   const asPath = await canonicalize(ref)
   const pathHit = asPath ? space.folders.find(folder => folder.path === asPath) : undefined
   if (!pathHit)
@@ -59,14 +61,14 @@ function newSpaceId(): string {
 }
 
 /**
- * 创建空间：在托管根下建壳目录（spaces/<名称>/projects/）
+ * 建立已完成核心登记的空间实体
  *
- * @description 建目录与建实体一体完成；名称同时是壳目录名，须为合法目录名且不与既有空间重名；
- * 核心工作区行的登记与绑定由 host 层接续完成
+ * @description 文件系统建壳与核心登记由上层统一操作模块完成；领域层只接收完整绑定，
+ * 因此不会产生无壳或未绑定的运行时实体
  *
- * @throws {SpaceOpError} 名称非法/重名、壳目录已存在
+ * @throws {SpaceOpError} 名称非法或重名
  */
-export async function createSpace(data: SpaceEntity[], name: string, root: string, firstFolderPath?: string): Promise<{ data: SpaceEntity[], space: SpaceEntity }> {
+export function createSpaceEntity(data: SpaceEntity[], name: string, shell: string, workspaceId: string): { data: SpaceEntity[], space: SpaceEntity } {
   let safeName: string
   try {
     safeName = assertFsSafeName(name)
@@ -76,27 +78,18 @@ export async function createSpace(data: SpaceEntity[], name: string, root: strin
   }
   if (data.some(space => space.name === safeName))
     throw new SpaceOpError(`空间「${safeName}」已存在`)
-
-  const shell = join(spacesDir(root), safeName)
-  if (await canonicalize(shell))
-    throw new SpaceOpError(`壳目录已存在：${shell}`)
-  await ensureDir(join(shell, SHELL_PROJECTS_DIR))
-
-  const space: SpaceEntity = { id: newSpaceId(), name: safeName, shell, folders: [] }
-  let next = [...data, space]
-  if (firstFolderPath !== undefined)
-    next = (await attachFolder(next, safeName, firstFolderPath)).data
-  return { data: next, space: findSpace(next, safeName) }
+  const space: SpaceEntity = { id: newSpaceId(), name: safeName, shell, workspaceId, folders: [] }
+  return { data: [...data, space], space }
 }
 
-/** attach 的公共校验：存在、是目录（成员可属于多个空间——归属歧义由 resolve/注入侧如实呈现） */
-async function prepareFolder(rawPath: string): Promise<{ real: string }> {
+/** attach 的公共校验：存在且是目录；成员可独立属于多个工作区 */
+export async function canonicalFolderPath(rawPath: string): Promise<string> {
   const real = await canonicalize(rawPath)
   if (!real)
     throw new SpaceOpError(`目录不存在：${rawPath}`)
   if (!(await stat(real)).isDirectory())
     throw new SpaceOpError(`不是目录：${rawPath}`)
-  return { real }
+  return real
 }
 
 /**
@@ -107,26 +100,41 @@ async function prepareFolder(rawPath: string): Promise<{ real: string }> {
  * - link（显式选择）：symlink 到壳内 projects/<目录名>，可用 options.name 改链接名
  * - 首个成员自动成为主成员
  *
- * @throws {SpaceOpError} 目录无效、同空间重复、显示名撞车、无壳空间被要求 link、壳内重名链接
+ * @throws {SpaceOpError} 目录无效、同空间重复、显示名撞车、链接名不安全、壳内重名链接
  */
 export async function attachFolder(data: SpaceEntity[], spaceRef: string, rawPath: string, options: { mode?: 'link' | 'reference', name?: string, title?: string, desc?: string } = {}): Promise<{ data: SpaceEntity[], space: SpaceEntity, folder: SpaceFolder }> {
   const space = findSpace(data, spaceRef)
-  const { real } = await prepareFolder(rawPath)
+  const real = await canonicalFolderPath(rawPath)
   // 多重归属指跨空间；同一空间内同路径重复是纯垃圾数据
   if (space.folders.some(folder => folder.path === real))
     throw new SpaceOpError(`该目录已在空间「${space.name}」中，无需重复挂入`)
 
   // 默认 reference（零磁盘侵入）；link 需显式选择
   const mode = options.mode ?? 'reference'
+  if (mode === 'reference' && options.name !== undefined)
+    throw new SpaceOpError('name 只用于 link 模式的壳内链接名')
   const folder: SpaceFolder = { path: real, mode }
   if (mode === 'link') {
-    if (!space.shell)
-      throw new SpaceOpError('该空间没有壳目录，只支持 reference 模式')
-    const linkName = options.name?.trim() || basename(real)
-    const linkPath = join(space.shell, SHELL_PROJECTS_DIR, linkName)
-    if (await canonicalize(linkPath))
-      throw new SpaceOpError(`壳内已有同名链接：${linkPath}（可用 name 指定另一个链接名）`)
-    await symlink(real, linkPath, 'dir')
+    let linkName: string
+    try {
+      linkName = assertSafePathSegment(options.name?.trim() || basename(real))
+    }
+    catch (error) {
+      throw new SpaceOpError((error as Error).message)
+    }
+    const projectsRoot = join(space.shell, SHELL_PROJECTS_DIR)
+    const linkPath = join(projectsRoot, linkName)
+    if (!isUnder(linkPath, projectsRoot))
+      throw new SpaceOpError(`链接路径逃逸壳目录：${linkPath}`)
+    const existing = await lstat(linkPath).catch(() => undefined)
+    if (existing) {
+      const sameTarget = existing.isSymbolicLink() && await canonicalize(linkPath) === real
+      if (!sameTarget)
+        throw new SpaceOpError(`壳内已有同名链接：${linkPath}（可用 name 指定另一个链接名）`)
+    }
+    else {
+      await symlink(real, linkPath, 'dir')
+    }
     folder.linkPath = linkPath
   }
   const title = options.title?.trim()
@@ -156,6 +164,9 @@ export async function detachFolder(data: SpaceEntity[], spaceRef: string, folder
   const space = findSpace(data, spaceRef)
   const folder = await findFolder(space, folderRef)
   if (folder.mode === 'link' && folder.linkPath) {
+    const projectsRoot = join(space.shell, SHELL_PROJECTS_DIR)
+    if (!isUnder(folder.linkPath, projectsRoot))
+      throw new SpaceOpError(`拒绝删除壳外链接：${folder.linkPath}`)
     const linkStat = await lstat(folder.linkPath).catch(() => undefined)
     if (linkStat?.isSymbolicLink())
       await rm(folder.linkPath)
@@ -167,18 +178,8 @@ export async function detachFolder(data: SpaceEntity[], spaceRef: string, folder
   return { data: data.map(item => (item.id === space.id ? next : item)), space: next, folder }
 }
 
-/**
- * 空间的有效路径：与核心工作区唯一对应的那条目录
- *
- * @description 壳优先；无壳时主成员兜底（无壳形态的正向表达——它就是该形态下的锚）；
- * 连主成员也没有时取数组首位。链上各级彼此独立成立，不依赖数组顺序
- */
-export function effectivePath(space: SpaceEntity): string | undefined {
-  return space.shell ?? space.primary ?? space.folders[0]?.path
-}
-
-/** 写入核心工作区行绑定（建壳登记后由 host 层调用；幂等覆写） */
-export function bindWorkspaceId(data: SpaceEntity[], spaceRef: string, workspaceId: string): { data: SpaceEntity[], space: SpaceEntity } {
+/** 更新核心工作区绑定，用于核心行被外部删除后的显式修复 */
+export function replaceWorkspaceId(data: SpaceEntity[], spaceRef: string, workspaceId: string): { data: SpaceEntity[], space: SpaceEntity } {
   const space = findSpace(data, spaceRef)
   const next: SpaceEntity = { ...space, workspaceId }
   return { data: data.map(item => (item.id === space.id ? next : item)), space: next }

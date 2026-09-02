@@ -1,13 +1,13 @@
 import type { ChatEntity, FolderStatus, SandboxModeName, SpaceEntity, Writability } from './types.ts'
 import { canonicalize, isUnder } from '../shared/fs-path.ts'
-import { effectivePath, listFolders } from './space.ts'
+import { listFolders } from './space.ts'
 
 export interface DoctorReport {
   space: SpaceEntity
   mode: SandboxModeName | 'unknown'
   sessionCwd: string
-  /** 壳目录的磁盘存在性（无壳为 none；missing 时注册表结构仍在，link 可推导重建） */
-  shellHealth: 'ok' | 'missing' | 'none'
+  /** 壳目录的磁盘存在性 */
+  shellHealth: 'ok' | 'missing'
   folders: (FolderStatus & { writability: Writability | null })[]
 }
 
@@ -21,13 +21,13 @@ export async function doctorSpace(space: SpaceEntity, sessionCwd: string, mode: 
   const sessionReal = await canonicalize(sessionCwd)
   const [folders, shellReal] = await Promise.all([
     listFolders(space),
-    space.shell ? canonicalize(space.shell) : Promise.resolve(undefined),
+    canonicalize(space.shell),
   ])
   return {
     space,
     mode,
     sessionCwd: sessionReal ?? sessionCwd,
-    shellHealth: !space.shell ? 'none' : shellReal ? 'ok' : 'missing',
+    shellHealth: shellReal ? 'ok' : 'missing',
     folders: folders.map((folder) => {
       const writability = folder.health === 'missing'
         ? 'read-only' as const
@@ -63,7 +63,7 @@ export interface CoreWorkspaceRow {
   path: string
 }
 
-export type BindingStatus = 'ok' | 'unbound' | 'dangling' | 'mismatch' | 'shared-row' | 'shared-path' | 'unknown'
+export type BindingStatus = 'ok' | 'dangling' | 'mismatch' | 'shared-row' | 'shared-path' | 'unknown'
 
 export interface BindingAudit {
   space: SpaceEntity
@@ -82,34 +82,29 @@ export interface BindingAudit {
  * @param allSpaces 全部空间（共享行/共享路径是跨空间判定）
  */
 export function auditBinding(space: SpaceEntity, rows: CoreWorkspaceRow[] | undefined, allSpaces: SpaceEntity[]): BindingAudit {
-  const effective = effectivePath(space)
   if (rows === undefined)
     return { space, status: 'unknown', detail: '核心 workspaceRegistry 不可用，绑定状态未知' }
 
-  if (!space.workspaceId) {
-    // 共享路径提前：无绑定时有效路径撞车仍要报（将来绑定会撞）
-    const clash = allSpaces.find(other => other.id !== space.id && effectivePath(other) !== undefined && effectivePath(other) === effective)
-    if (clash)
-      return { space, status: 'shared-path', detail: `有效路径与空间「${clash.name}」相同（${effective}），绑定会撞车` }
-    return { space, status: 'unbound', detail: effective ? `无绑定（有效路径 ${effective}）；被动渲染不建行，实际操作时再登记` : '无绑定且无有效路径（纯注解合集）' }
-  }
-
   const row = rows.find(item => item.id === space.workspaceId)
   if (!row)
-    return { space, status: 'dangling', detail: `绑定 ${space.workspaceId} 查无此行（核心侧该行已被删除）；悬空是正常表现，需要时重新登记即可` }
+    return { space, status: 'dangling', detail: `绑定 ${space.workspaceId} 查无此行（核心侧该行已被删除）；不会自动修复，请显式执行 rebind` }
 
-  if (row.path !== effective)
-    return { space, status: 'mismatch', row, detail: `行 ${row.id} 的 path（${row.path}）≠ 有效路径（${effective ?? '无'}）；数据质量问题，请人工核对` }
+  if (row.path !== space.shell)
+    return { space, status: 'mismatch', row, detail: `行 ${row.id} 的 path（${row.path}）≠ 壳目录（${space.shell}）；数据质量问题，请人工核对` }
 
   const rowClash = allSpaces.find(other => other.id !== space.id && other.workspaceId === row.id)
   if (rowClash)
     return { space, status: 'shared-row', row, detail: `行 ${row.id} 同时被空间「${rowClash.name}」绑定` }
 
+  const pathClash = allSpaces.find(other => other.id !== space.id && other.shell === space.shell)
+  if (pathClash)
+    return { space, status: 'shared-path', row, detail: `壳目录与空间「${pathClash.name}」相同（${space.shell}）` }
+
   return { space, status: 'ok', row, detail: `已绑定 ${row.id}（path 一致）` }
 }
 
 /** 对话实体的诊断状态 */
-export type ChatHealth = 'ok' | 'unbound' | 'dangling' | 'missing-dir'
+export type ChatHealth = 'ok' | 'unknown' | 'dangling' | 'mismatch' | 'missing-dir'
 
 export interface ChatAudit {
   chat: ChatEntity
@@ -128,11 +123,11 @@ export async function auditChat(chat: ChatEntity, rows: CoreWorkspaceRow[] | und
   if (!dirExists)
     return { chat, status: 'missing-dir', detail: `目录已从磁盘消失：${chat.path}` }
   if (rows === undefined)
-    return { chat, status: 'unbound', detail: '核心 workspaceRegistry 不可用，绑定状态未知' }
-  if (!chat.workspaceId)
-    return { chat, status: 'unbound', detail: `无绑定（${chat.path}）；实际操作时再登记` }
+    return { chat, status: 'unknown', detail: '核心 workspaceRegistry 不可用，绑定状态未知' }
   const row = rows.find(item => item.id === chat.workspaceId)
   if (!row)
-    return { chat, status: 'dangling', detail: `绑定 ${chat.workspaceId} 查无此行；悬空是正常表现，需要时重新登记即可` }
+    return { chat, status: 'dangling', detail: `绑定 ${chat.workspaceId} 查无此行；不会自动修复，请显式执行 rebind` }
+  if (row.path !== chat.path)
+    return { chat, status: 'mismatch', detail: `行 ${row.id} 的 path（${row.path}）≠ 对话目录（${chat.path}）` }
   return { chat, status: 'ok', detail: `已绑定 ${row.id}` }
 }

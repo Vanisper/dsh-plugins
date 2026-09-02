@@ -1,87 +1,135 @@
 # dsh-space
 
-DSH 多项目空间插件。两条创建路径、两类实体：
+DSH 多项目工作区插件。它扩展核心 workspace，而不是另建一套会话归属系统。
 
-- **工作区（space）**：建立 = 建壳目录。工作区**允许多目录**——壳为物理入口，成员文件夹以 **reference（原地引用，默认）** 或 **link（壳内 symlink，显式选择）** 挂入，作为提示词语义上的扩展
-- **对话（chat）**：建立 = **静默**在 `chats/<本地日期>/` 下建目录。静默指位置自动确定（用户不选地方），不是不留痕
+插件提供两条创建路径：
+
+- **工作区（space）**：在托管根下建立固定壳目录，将壳登记为核心 workspace，再写入插件附加注册表
+- **对话（chat）**：按本地日期自动建立目录，将目录登记为核心 workspace，再写入插件附加注册表
 
 ```text
-~/Documents/dsh/                  ← 托管根（settings 里可改）
-├── spaces/<空间名>/              ← 工作区壳目录（创建即建）
-│   ├── projects/<成员>           ← link 成员的 symlink
-│   └── docs/ notes/ …            ← 空间级资产展开点
-└── chats/<本地日期>/<slug>/       ← 对话目录（/space chat，重名加 -2 序号）
+~/Documents/dsh/                   ← 托管根（settings 中可修改）
+├── spaces/<工作区名称>/           ← 工作区固定壳目录
+│   ├── projects/<成员>            ← link 成员的 symlink
+│   └── docs/ notes/ …             ← 工作区级资产展开点
+└── chats/<本地日期>/<slug>/        ← 对话目录，重名追加 -2、-3…
 ```
 
-## 注册表与绑定
+## 领域模型
 
-- 注册表存于 dsh settings（`dsh-space` 命名空间），两类实体：`spaces`（id/名称/壳/主成员/成员列表/绑定）与 `chats`（路径/绑定）
-- **id-first 纪律**：两条创建路径都在创建动作里把目录幂等登记（create-or-get）为核心工作区行并持有 `workspaceId` 绑定；凡接触核心工作区一律先 id 后 path
-- `workspace.path` 只是经 id 查出的派生属性，仅用于一致性校验与悬空恢复——为上游未来把 `path` 演进为 `paths[]`（deepseek-harness #991）预留最小爆炸半径
-- 除此之外对核心注册表一律只读
-- **红线：sessionId 零持久化**——不存会话引用；哪个会话属于哪个工作区/对话由绑定行上的核心账目（`sessionIds`）承载
+### 核心 workspace
 
-## 有效路径与入口
+核心 `workspaceRegistry` 是会话归属的唯一权威：
 
-```
-有效路径 = 壳目录 ?? 主成员 ?? 首位成员
-```
+- 每个工作区壳目录对应一条核心 workspace 记录
+- 每个对话目录对应一条核心 workspace 记录
+- 会话归属只读取核心记录的 `sessionIds`
+- 插件不保存 `sessionId`，也不根据会话 cwd 猜测或补偿归组
 
-- **壳是唯一正典 cwd 入口**：工作区的新会话从壳目录创建；无壳空间用主成员兜底（无壳形态的正向表达），连主成员也没有则无入口
-- **成员是纯注解**：link/ref 成员只是提示词语义（告知 agent 本工作语境），不是匹配面、不是会话入口；cwd 在成员目录里的会话不属于任何工作区
-- 匹配（认领存量会话）与入口（产生新会话）是分离规则：识别宽松（有效路径子树包含即认领）、入口严格
-- `primary` 是纯字段标记，不联动排序——「primary 排首位」只是前端当前的展示倾向
+核心 workspace 会按会话头部的 cwd 校验 `sessionIds`。因此，工作区新会话必须从固定壳目录对应的核心 workspace 创建。
 
-## 异常谱系（doctor 只读检测，不治愈）
+### 插件附加注册表
 
-| 异常 | 判定 |
+插件注册表存于 dsh settings 的 `dsh-space` 命名空间，只描述核心 workspace 不表达的信息：
+
+- 工作区 id、名称、固定壳目录和核心 `workspaceId`
+- 成员目录、挂入方式、显示名和说明
+- 唯一的主成员标记 `primary`
+- 对话目录和核心 `workspaceId`
+
+`workspaceId` 是对核心记录的稳定引用。`workspace.path` 只用于核对该记录是否仍指向预期壳目录，不作为插件注册表的身份键。
+
+### 壳目录与成员
+
+- **壳目录**是工作区稳定入口，创建后不随 `primary` 改变
+- **成员目录**是工作语境的附加描述，不注册为独立 workspace，也不是会话入口
+- `reference` 只记录成员真实目录，默认使用，不改动磁盘结构
+- `link` 在壳内 `projects/` 下建立 symlink，必须显式选择
+- `primary` 只表示主成员，不改变壳目录、核心绑定、cwd 或会话归组
+
+前端目前会把主成员排在成员列表首位作为展示效果；这不是注册表顺序不变量，也不属于 `setPrimary` 的领域语义。
+
+## 创建流程
+
+### 新建工作区
+
+UI 的“新建工作区”打开创建弹窗，提交后由统一操作模块顺序完成：
+
+1. 校验工作区名称和可选首成员
+2. 建立或复用 `spaces/<名称>/` 壳目录
+3. 用壳目录登记或取得核心 workspace
+4. 可选地以 `reference` 或 `link` 挂入首成员
+5. 写入插件附加注册表
+
+所有 UI、HTTP、模型工具和 `/space` 命令的写操作都通过同一个 `SpaceOperations.execute()` 接口串行执行，避免调用方各自拼接半套流程或用旧快照覆盖新状态。
+
+### 新建对话
+
+UI 的“新建对话”无需弹窗，单击后顺序完成：
+
+1. 在 `chats/<本地日期>/` 下建立 `new-chat` 目录，重名时追加序号
+2. 将该目录登记为核心 workspace
+3. 写入对话附加记录
+4. 用返回的 `workspaceId` 打开新会话
+
+## 诊断与修复
+
+`doctor` 只读检查目录与绑定，不在启动或渲染时静默改写异常数据。
+
+| 状态 | 含义 |
 | --- | --- |
-| A 悬空 | 绑定 id 查无此行（核心侧行被删除——正常表现） |
-| B 错位 | 行在，但 `行.path ≠ 有效路径`（数据质量问题，只报告） |
-| C 缺失 | 无绑定（被动渲染不建行，实际操作时再登记） |
-| D 壳消失 | 壳目录磁盘不存在（注册表结构仍在，link 可推导重建） |
-| E 共享行/路径 | 两空间绑同一行或有效路径相同 |
-| F 成员异常 | 目录缺失 / link 断裂（doctor 既有职责） |
+| 悬空绑定 | 插件持有的 `workspaceId` 在核心注册表中不存在 |
+| 错位绑定 | 核心记录存在，但其 path 与工作区壳或对话目录不一致 |
+| 共享记录 | 两个工作区引用同一核心 workspace id |
+| 共享壳目录 | 两个工作区记录使用同一壳目录 |
+| 壳目录缺失 | 插件结构仍在，但壳目录已从磁盘消失 |
+| 成员异常 | 成员目录缺失或 link 已断裂 |
 
-对话实体的健康同样只读检测：目录消失 / 未绑定 / 绑定悬空。
+显式 `rebind` 会按当前壳目录或对话目录重新取得核心 workspace，并更新插件的 `workspaceId`。它不会迁移历史会话，也不会在正常读取路径中自动触发。
 
-## 能力
+## 客户端
 
-- **模型工具 `space`**：`list` / `create` / `attach` / `detach` / `primary` / `title` / `desc` / `doctor` / `chat` / `chatdrop` / `drop`
-- **用户命令 `/space`**：同上子命令 + `status`
-- **上下文注入**：cwd 落在空间的有效路径子树内时，系统上下文自动附带空间地图（入口目录 + 成员 + 沙盒约束提示）
-- **客户端侧边栏**：接管官方 `sidebar.workspaces` 区域（single 插槽顶替，卸载即还原）——
-  工作区卡片（名称/绑定徽标/折叠记忆/成员区/设主/摘除/拖拽排序）+ 对话区（chats 按日期分组）+ 未归组杂项；
-  会话行三态状态点（等待交互/运行中/完成未读），点击跳转；内联创建表单（工作区带原生目录选择器与 ref/link 切换，对话建目录即开会话）
-- **逃生门**：`localStorage['dsh-space.sidebar.off'] = '1'` 后刷新即还原官方侧边栏，清除该键恢复
-- **浏览器侧 HTTP API**（web profile；客户端侧边栏的数据面）：
-  - `GET /api/dsh-space/registry` → `{root, spaces（含预算 effectivePath）, chats}`
-  - `POST /api/dsh-space/resolve` `{paths: string[]}` → 批量 cwd 认领（canonicalize + 子树包含，宽松识别）
-  - `POST /api/dsh-space/ops` `{op, …}` → `create-space | attach | detach | primary | chat | chatdrop | drop | rebind | reorder-spaces`，与工具/命令共用域函数；`rebind` 为按需治愈（悬空重建绑定），`reorder-spaces` 为拖拽排序落库
+客户端接管 `sidebar.workspaces` 单插槽并展示：
 
-## 读写语义
+- 工作区卡片、成员和核心 `sessionIds` 下的会话
+- 按日期分组的对话及其会话
+- 核心没有归属账目的未归组会话
+- 核心绑定同步中、有效、悬空或错位的状态
+- 绑定悬空或错位时独立显示“修复绑定”，不会把“新会话”点击隐式变成修复动作
 
-- 读取不限成员边界（dsh 沙盒不限制读）
-- 会话 cwd 固定在入口目录；`workspace-write` 下仅 cwd 子树可写，写其他成员会被风控拦截（预期行为，解法后置）；`danger-full-access` 全开
-- `doctor` 逐成员报告可写性、link 健康度、目录缺失，外加工作区绑定审计与对话实体健康
+浏览器侧只使用两条 HTTP 路由：
 
-## 规则
+- `GET /api/dsh-space/registry`：读取运行时注册表快照
+- `POST /api/dsh-space/ops`：执行统一写操作
 
-- 同一文件夹可属于多个空间（跨空间多重归属；有效路径子树重叠时命中全部地图）
-- 显示名（title）是成员的身份键之一，同一空间内不得撞车
-- `detach` 连带删除壳内 symlink（插件自建产物），真实目录不动；`drop` / `chatdrop` 只删注册表记录，磁盘目录由用户手工清理
+不存在 cwd 批量认领接口。`localStorage['dsh-space.sidebar.off'] = '1'` 后刷新可恢复官方侧边栏，清除该键后重新启用插件侧边栏。
+
+## 工具与命令
+
+- 模型工具 `space`：`list`、`create`、`attach`、`detach`、`primary`、`title`、`desc`、`doctor`、`rebind`、`chat`、`chatdrop`、`drop`
+- 用户命令 `/space`：对应子命令以及 `status`
+- 上下文注入：仅当会话 cwd 位于工作区壳目录子树时注入工作区地图
+
+## 迁移边界
+
+注册表 v2 的运行时不变量是：每个工作区都有 `shell` 和 `workspaceId`，每个对话都有 `workspaceId`。无壳、未绑定只作为 v1 旧注册表的启动输入：初始化时一次性建立缺失壳或绑定，然后保存为 v2；运行时不保留无壳模式。结构不完整的 v2 会直接拒绝，而不是继续扩张兼容分支。
+
+已有 v2 的悬空、错位绑定和磁盘缺失目录会原样保留，交给 `doctor` 报告或显式 `rebind` 处理。未知的未来版本会直接拒绝，避免旧代码静默覆盖新格式。
+
+旧无壳工作区提升到新壳后，历史会话不会自动迁移。核心 `sessionIds` 会继续按不可变的会话头 cwd 校验，而历史 cwd 仍指向旧目录，所以这些会话可能进入未归组；新建会话不再受 `primary` 切换影响。
+
+## 读写边界
+
+- dsh 沙盒不限制读取成员目录
+- `workspace-write` 只允许写会话 cwd 子树；壳外 `reference` 成员和 realpath 后离开壳的 link 目标可能被拒绝写入
+- `detach` 只移除成员记录，并删除插件创建的壳内 symlink；真实目录不动
+- `drop` 和 `chatdrop` 只删除插件附加记录；核心 workspace、会话日志和磁盘目录不动
+- 删除核心 workspace 后，其会话由核心行为转入未归组；插件绑定会显示为悬空
 
 ## 安装
 
 ```bash
-# 在本仓库内构建后：
 dsh plugin --profile web add link:<本仓库路径>/packages/space
 ```
 
-安装会把包加入 profile 的 `dsh.profile.bundles`（本包声明了 `dsh.bundle.patch`），重启 dsh 后生效。
-
-## 边界
-
-- 不 patch、不包装任何核心服务；官方未来若提供多文件夹工作区（deepseek-harness #991），本插件的实体模型与之同构，可平移
-- 会话 cwd 经 symlink 进入成员目录时按 realpath 归属——realpath 出壳即不命中，与「成员不是入口」的模型一致
-- 「用户在核心 UI 删除工作区行」不触发本插件任何响应：绑定悬空由 doctor 如实报告，治愈措施遇到再议
+构建后重启 dsh 使插件生效。

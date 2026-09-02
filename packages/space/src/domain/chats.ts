@@ -4,15 +4,19 @@ import { canonicalize } from '../shared/fs-path.ts'
 import { chatsDir, dedupeDir, ensureDir, slugify, todayDirName } from '../shared/paths.ts'
 
 /**
- * 建立对话：静默建目录（chats/<本地日期>/<slug>，重名加 -2 序号）并登记为实体
+ * 建立对话目录：chats/<本地日期>/<slug>，重名加 -2 序号
  *
- * @description 目录位置自动确定；核心工作区行的登记与绑定由 host 层接续完成
- * @returns 追加实体后的新数组与该对话实体
+ * @description 只负责文件系统目录；核心登记成功后再由 {@link createChatEntity} 建立附加记录
  */
-export async function createChat(data: ChatEntity[], root: string, name?: string): Promise<{ data: ChatEntity[], chat: ChatEntity }> {
+export async function createChatDirectory(root: string, name?: string): Promise<string> {
   const parent = await ensureDir(join(chatsDir(root), todayDirName()))
   const dir = await dedupeDir(parent, slugify(name ?? 'new-chat'))
-  const chat: ChatEntity = { path: await ensureDir(dir) }
+  return ensureDir(dir)
+}
+
+/** 建立已完成核心登记的对话实体 */
+export function createChatEntity(data: ChatEntity[], path: string, workspaceId: string): { data: ChatEntity[], chat: ChatEntity } {
+  const chat: ChatEntity = { path, workspaceId }
   return { data: [...data, chat], chat }
 }
 
@@ -38,8 +42,8 @@ export async function findChat(data: ChatEntity[], ref: string): Promise<ChatEnt
   throw new Error(`没有这个对话：${ref}`)
 }
 
-/** 写入核心工作区行绑定（建目录登记后由 host 层以精确路径调用；幂等覆写） */
-export function bindChatWorkspaceId(data: ChatEntity[], path: string, workspaceId: string): { data: ChatEntity[], chat: ChatEntity } {
+/** 更新核心工作区绑定，用于核心行被外部删除后的显式修复 */
+export function replaceChatWorkspaceId(data: ChatEntity[], path: string, workspaceId: string): { data: ChatEntity[], chat: ChatEntity } {
   const next: ChatEntity = { path, workspaceId }
   return { data: data.map(item => (item.path === path ? next : item)), chat: next }
 }

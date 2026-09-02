@@ -26,16 +26,9 @@ export interface SlotsLike {
 export interface RegistryPayload {
   ok: boolean
   root: string
-  spaces: Array<{ id: string, name: string, shell?: string, primary?: string, workspaceId?: string, effectivePath?: string, folders: Array<{ path: string, mode: 'link' | 'reference', title?: string }> }>
-  chats: Array<{ path: string, workspaceId?: string }>
+  spaces: Array<{ id: string, name: string, shell: string, primary?: string, workspaceId: string, folders: Array<{ path: string, mode: 'link' | 'reference', linkPath?: string, title?: string, desc?: string }> }>
+  chats: Array<{ path: string, workspaceId: string }>
   error?: string
-}
-
-/** POST /api/dsh-space/resolve 的单条结果 */
-export interface ResolveResult {
-  input: string
-  canonical?: string
-  spaceIds: string[]
 }
 
 /** 会话列表行的最小投影（宿主 sessions 服务的 SessionSummary） */
@@ -75,7 +68,7 @@ export interface WorkspaceRow {
 export interface WorkspacesLike {
   list: {
     subscribe: (fn: () => void) => () => void
-    getSnapshot: () => { items: WorkspaceRow[], archivedSessionIds: string[] }
+    getSnapshot: () => { items: WorkspaceRow[], archivedSessionIds: string[], phase: 'pending' | 'ready' }
   }
   startSession: (workspaceId?: string) => void
   pickDirectory: () => Promise<string | null>

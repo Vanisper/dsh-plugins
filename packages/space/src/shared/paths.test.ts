@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { canonicalize } from './fs-path.ts'
-import { assertFsSafeName, chatsDir, dedupeDir, ensureDir, resolveRoot, slugify, spacesDir, todayDirName } from './paths.ts'
+import { assertFsSafeName, assertSafePathSegment, chatsDir, dedupeDir, ensureDir, resolveRoot, slugify, spacesDir, todayDirName } from './paths.ts'
 
 let dir: string
 
@@ -21,6 +21,10 @@ describe('resolveRoot', () => {
     expect(resolveRoot('  ')).toBe(join(process.env.HOME ?? '', 'Documents', 'dsh'))
     expect(resolveRoot(undefined)).toBe(join(process.env.HOME ?? '', 'Documents', 'dsh'))
   })
+
+  it('拒绝相对托管根', () => {
+    expect(() => resolveRoot('relative/root')).toThrow('绝对路径')
+  })
 })
 
 describe('目录布局', () => {
@@ -31,12 +35,22 @@ describe('目录布局', () => {
 })
 
 describe('assertFsSafeName', () => {
-  it('拒绝空名、路径分隔符、点开头与空白连字符', () => {
+  it('拒绝空名、路径分隔符、点开头与空白，允许连字符', () => {
     expect(() => assertFsSafeName('')).toThrow('不能为空')
     expect(() => assertFsSafeName('a/b')).toThrow('非法字符')
     expect(() => assertFsSafeName('.hidden')).toThrow('非法字符')
     expect(() => assertFsSafeName('my space')).toThrow('非法字符')
+    expect(assertFsSafeName('my-space')).toBe('my-space')
     expect(assertFsSafeName('  测试工作区  ')).toBe('测试工作区')
+  })
+})
+
+describe('assertSafePathSegment', () => {
+  it('拒绝路径逃逸与多段名称', () => {
+    expect(() => assertSafePathSegment('..')).toThrow('安全的单段名称')
+    expect(() => assertSafePathSegment('../repo')).toThrow('安全的单段名称')
+    expect(() => assertSafePathSegment('a/b')).toThrow('安全的单段名称')
+    expect(assertSafePathSegment('repo-name')).toBe('repo-name')
   })
 })
 

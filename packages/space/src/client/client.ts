@@ -6,6 +6,8 @@
 // 会话分桶三级规则：绑定行 sessionIds（核心账目，主）→ resolve 宽松认领
 // （cwd 落有效路径子树的存量，合并语义防振荡）→ 杂项桶。
 // single 插槽顶替：显式 priority -10（lowest renders），卸载即还原官方浏览器。
+// React 纪律：SpaceSidebar 内所有 hook 无条件前置——任何提前 return
+// （loading/error 分支）之前不许出现 hook 调用，否则 invariant #310 崩插槽
 // 逃生门：localStorage['dsh-space.sidebar.off'] === '1' 时跳过接管注册。
 // ============================================================
 import type { ClientContext, ReactLike, ReactNode, RegistryPayload, ResolveResult, SessionRow, SessionsLike, SlotsLike, WorkspacesLike } from './types.ts'
@@ -147,7 +149,10 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       const { sessions, workspaces } = props.services
       const el = (tag: string, attrs: Record<string, unknown> | null, ...children: ReactNode[]): ReactNode => React.createElement(tag, attrs, ...children)
 
+      // hooks 全部无条件前置——任何提前 return 之前不许再出现 hook 调用
       const [state, setState] = React.useState<SideState>({ status: 'loading', version: 0 })
+      const [form, setForm] = React.useState<{ kind: 'space' | 'chat' | null, name: string, folder: string | null, link: boolean, busy: boolean, error?: string }>({ kind: null, name: '', folder: null, link: false, busy: false })
+      const [pendingConfirm, setPendingConfirm] = React.useState<{ question: string, fn: () => Promise<unknown> } | null>(null)
       // 宽松认领：cwd → 首个命中空间 id（仅对未被绑定行认领的会话）
       const [claimMap, setClaimMap] = React.useState<Record<string, string>>({})
       // 折叠记忆（localStorage 持久）
@@ -322,7 +327,6 @@ const clientInject = ['slots', 'sessions', 'workspaces']
       }
 
       // —— 创建表单 ——
-      const [form, setForm] = React.useState<{ kind: 'space' | 'chat' | null, name: string, folder: string | null, link: boolean, busy: boolean, error?: string }>({ kind: null, name: '', folder: null, link: false, busy: false })
       const runOp = async (fn: () => Promise<unknown>): Promise<void> => {
         setForm(prev => ({ ...prev, busy: true, error: undefined }))
         try {
@@ -365,7 +369,6 @@ const clientInject = ['slots', 'sessions', 'workspaces']
 
       // —— 卡片维护动作 ——
       // 内联确认条（no-alert 规则禁原生 confirm；侧边栏内嵌确认更贴 UI）
-      const [pendingConfirm, setPendingConfirm] = React.useState<{ question: string, fn: () => Promise<unknown> } | null>(null)
       const confirmDo = (question: string, fn: () => Promise<unknown>): void => setPendingConfirm({ question, fn })
       const confirmBar = pendingConfirm
         ? el('div', { className: 'dsp-form' }, el('div', { className: 'dsp-meta' }, pendingConfirm.question), el('div', { className: 'dsp-form-row' }, el('button', {

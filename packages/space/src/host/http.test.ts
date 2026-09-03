@@ -12,6 +12,7 @@ describe('parseOperation', () => {
 
   it('maps only the supported operations', () => {
     expect(parseOperation({ op: 'description', workspace: 'w', target: 'm', value: 'text' })).toEqual({ op: 'description', workspace: 'w', target: 'm', value: 'text' })
+    expect(parseOperation({ op: 'update-member', workspace: 'w', target: 'm', title: 'Title', description: 'Note' })).toEqual({ op: 'update-member', workspace: 'w', target: 'm', title: 'Title', description: 'Note' })
     expect(() => parseOperation({ op: 'rename-workspace', workspace: 'w' })).toThrow('未知操作')
   })
 })

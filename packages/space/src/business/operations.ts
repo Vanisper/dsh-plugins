@@ -19,6 +19,7 @@ export type SpaceOperation
     | { op: 'primary', workspace: string, target: string }
     | { op: 'title', workspace: string, target: string, value: string }
     | { op: 'description', workspace: string, target: string, value: string }
+    | { op: 'update-member', workspace: string, target: string, title: string, description: string }
     | { op: 'create-chat', name?: string }
     | { op: 'drop-space', workspace: string }
     | { op: 'drop-chat', workspace: string }
@@ -132,6 +133,7 @@ class SpaceOperationsImpl implements SpaceOperations {
       case 'primary': return this.primary(current, operation)
       case 'title': return this.memberTitle(current, operation)
       case 'description': return this.memberDescription(current, operation)
+      case 'update-member': return this.updateMemberDetails(current, operation)
       case 'create-chat': return this.createChat(current, operation.name)
       case 'drop-space': return this.drop(current, operation.workspace, 'space')
       case 'drop-chat': return this.drop(current, operation.workspace, 'chat')
@@ -267,6 +269,17 @@ class SpaceOperationsImpl implements SpaceOperations {
     const space = this.requireSpace(current, operation.workspace)
     const member = findMember(space, operation.target)
     const nextSpace = updateMember(space, member, { description: operation.value })
+    await this.save({ ...clone(current), spaces: replaceSpace(current.spaces, nextSpace) })
+    return { member: findMember(nextSpace, member.path) }
+  }
+
+  private async updateMemberDetails(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'update-member' }>): Promise<Record<string, unknown>> {
+    const space = this.requireSpace(current, operation.workspace)
+    const member = findMember(space, operation.target)
+    const title = operation.title.trim()
+    if (title && space.members.some(item => item !== member && (item.title === title || basename(item.path) === title)))
+      throw new Error(`成员显示名与现有成员冲突：${title}`)
+    const nextSpace = updateMember(space, member, { title: operation.title, description: operation.description })
     await this.save({ ...clone(current), spaces: replaceSpace(current.spaces, nextSpace) })
     return { member: findMember(nextSpace, member.path) }
   }

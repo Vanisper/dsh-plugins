@@ -225,3 +225,27 @@ describe('operation queue', () => {
     })
   })
 })
+
+describe('update member', () => {
+  it('updates title and description with one settings write', async () => {
+    const root = await temporaryRoot()
+    const memberPath = join(root, 'member')
+    await mkdir(memberPath)
+    const initial: SpaceSettings = {
+      root: '',
+      spaces: [{ workspaceId: 'space', primary: memberPath, members: [{ path: memberPath, mode: 'reference', title: 'Old' }] }],
+      chats: [],
+    }
+    const store = fakeStore(root, initial)
+    const workspaces = fakeWorkspaces([{ workspaceId: 'space', path: join(root, 'space'), title: 'Space', sessionIds: [] }])
+    let writes = 0
+    store.afterReplace = async () => {
+      writes += 1
+    }
+
+    await createSpaceOperations(store, workspaces).execute({ op: 'update-member', workspace: 'space', target: memberPath, title: 'New', description: 'Details' })
+
+    expect(writes).toBe(1)
+    expect(store.value.spaces[0]?.members[0]).toMatchObject({ title: 'New', description: 'Details' })
+  })
+})

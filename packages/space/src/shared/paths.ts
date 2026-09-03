@@ -1,4 +1,4 @@
-import { mkdir, readdir } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { CHATS_DIR, SPACES_DIR } from './constants.ts'
@@ -49,18 +49,6 @@ export function slugify(value: string): string {
     .replace(/-{2,}/g, '-')
     .replace(/^-|-$/g, '')
   return slug || 'new-chat'
-}
-
-/** 在同一日期目录内选择未占用的目录名 */
-export async function uniqueDirectory(parent: string, baseName: string): Promise<string> {
-  const names = new Set(await readdir(parent).catch(() => [] as string[]))
-  let candidate = baseName
-  let suffix = 2
-  while (names.has(candidate)) {
-    candidate = `${baseName}-${suffix}`
-    suffix += 1
-  }
-  return join(parent, candidate)
 }
 
 /** 本地日历日，避免 UTC 跨日造成目录错位 */

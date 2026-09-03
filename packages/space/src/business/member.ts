@@ -1,6 +1,6 @@
 import type { MemberData, SpaceData } from './types.ts'
 import { lstat, mkdir, readlink, rm, symlink } from 'node:fs/promises'
-import { basename, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { PROJECTS_DIR } from '../shared/constants.ts'
 import { canonicalize, isUnder } from '../shared/fs-path.ts'
 import { assertPathSegment } from '../shared/paths.ts'
@@ -96,27 +96,17 @@ export async function removeMemberLink(workspacePath: string, member: MemberData
   const current = await lstat(target).catch(() => undefined)
   if (!current?.isSymbolicLink())
     return
-  let targetPath: string | undefined
+  const memberPath = await canonicalize(member.path) ?? resolve(member.path)
   try {
     const raw = await readlink(target)
-    targetPath = await canonicalize(isAbsolute(raw) ? raw : join(workspacePath, raw))
-    if (!targetPath && raw === member.path)
-      targetPath = member.path
+    const rawTarget = isAbsolute(raw) ? raw : resolve(dirname(target), raw)
+    const targetPath = await canonicalize(rawTarget) ?? resolve(rawTarget)
+    if (targetPath === memberPath)
+      await rm(target)
   }
   catch {
-    // 断链时 realpath 失败，下面用链接文本与规范目标再做一次安全比较
-    try {
-      const raw = await readlink(target)
-      targetPath = await canonicalize(join(workspacePath, raw))
-      if (!targetPath && raw === member.path)
-        targetPath = member.path
-    }
-    catch {
-      return
-    }
+    // 链接可能已被并发删除
   }
-  if (targetPath === member.path)
-    await rm(target)
 }
 
 /** 计算供提示词和界面展示的动态链接路径 */
@@ -147,11 +137,12 @@ export function addMemberData(space: SpaceData, member: MemberData): SpaceData {
 export function removeMemberData(space: SpaceData, member: MemberData): SpaceData {
   const members = space.members.filter(item => item !== member)
   const primary = space.primary === member.path ? members[0]?.path : space.primary
-  return {
-    ...space,
-    members,
-    ...(primary ? { primary } : { primary: undefined }),
-  }
+  const next: SpaceData = { ...space, members }
+  if (primary)
+    next.primary = primary
+  else
+    delete next.primary
+  return next
 }
 
 export function updateMember(space: SpaceData, oldMember: MemberData, patch: Partial<Pick<MemberData, 'title' | 'description'>>): SpaceData {

@@ -6,7 +6,7 @@
 
 | 包 | 说明 |
 | --- | --- |
-| [dsh-space](packages/space/) | 多项目空间：工作区（壳目录 + 多成员注解）与对话（chats/<日期>/ 静默目录）两条创建路径，id-first 工作区绑定 + 空间地图注入 |
+| [dsh-space](packages/space/) | 基于官方 Workspace 的多项目附加描述与日期对话目录；核心 Workspace 拥有会话归属，插件停用后自然退化为官方模式 |
 
 ## 调研笔记
 
@@ -28,5 +28,5 @@ pnpm run lint:fix    # lint + 自动修复
 ## 设计约定
 
 - 插件不 patch、不 monkey-patch dsh 核心服务；只用公开的服务注入、工具/命令注册、上下文贡献等扩展点
-- 用户数据（空间定义等）以磁盘文件为权威载体（如 `space.yaml`），不锁在 dsh 内部存储里
+- 核心 Workspace 注册表拥有 Workspace ID、目录、顺序和会话归属；插件设置只保存成员与类型等附加描述
 - 当官方 web profile 出现会话级附加目录（/add-dir 类）或多根 workspace 时，重新评估相关插件的集成方式

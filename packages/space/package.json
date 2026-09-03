@@ -2,7 +2,7 @@
   "name": "dsh-space",
   "type": "module",
   "version": "0.1.0",
-  "description": "DSH 多项目空间插件：工作区（壳目录 + 多成员注解）与对话（chats/<日期>/ 静默目录）两条创建路径，id-first 工作区绑定与空间地图上下文注入",
+  "description": "DSH 多项目空间插件：基于官方 Workspace 的成员附加描述与日期对话目录",
   "license": "MIT",
   "keywords": [
     "dsh",

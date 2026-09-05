@@ -1,5 +1,21 @@
 # dsh-space 上下文
 
+`dsh-space` 是围绕官方 Workspace 的多目录组织层。它先解决目录成员、会话分组和人类可读投影，再在未来按宿主能力接入跨目录权限；组织关系不等同于权限授予。
+
+## 语言
+
+**空间（Space）**：一个核心 Workspace 的多目录组织描述，包含成员目录、成员说明和主成员标记。空间不拥有 Workspace 身份、会话归属或排序。
+
+**成员（Member）**：空间引用的一个真实目录及其展示元数据。成员路径必须指向目录；`reference` 与 `link` 只描述接入形态，不自动改变沙箱权限。
+
+**对话工作区（Chat Workspace）**：由插件创建的、按本地日期和名称组织的核心 Workspace 附加描述。它与 Space 共享核心 Workspace 生命周期，但不包含成员集合。
+
+**组织层（Organization Layer）**：目录和会话的可见关系、命名、分组与提示词投影。组织层可以独立运行，即使宿主暂时不能授予成员目录的写权限。
+
+**权限层（Permission Layer）**：由宿主沙箱或其他执行能力决定的可读写范围。权限层可以在未来消费 Space 的成员集合，但不能反向成为 Space 身份或会话归属的事实源。
+
+_Avoid_: 把 Space 当作第二套 Workspace 注册表；把成员引用当作权限授予；把主成员当作会话归属规则
+
 ## 唯一事实源
 
 运行时模型是：
@@ -17,12 +33,3 @@ workspaceId -> canonical directory -> ordered sessionIds
 ## 降级规则
 
 移除 Space 或 Chat 描述只修改插件设置，保留核心 Workspace、目录和会话。插件卸载不会清理或重排官方 Workspace 数据。
-
-## 分层
-
-- `src/business/`：业务规则与操作编排
-- `src/store/`：设置适配器
-- `src/workspace/`：核心 Workspace 适配器
-- `src/host/`：HTTP、命令、工具和提示词
-- `src/client/`：侧栏投影和客户端交互
-- `src/shared/`：路径、常量和日志

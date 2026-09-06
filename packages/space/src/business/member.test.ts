@@ -3,7 +3,28 @@ import { lstat, mkdir, mkdtemp, readlink, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { removeMemberData, removeMemberLink } from './member.ts'
+import { addMemberData, findMember, removeMemberData, removeMemberLink, updateMember } from './member.ts'
+
+describe('成员引用', () => {
+  const first: MemberData = { path: '/one/api', mode: 'reference', title: 'Backend' }
+  const space: SpaceData = { workspaceId: 'space', members: [first] }
+
+  it('完整路径优先于其他成员的显示名', () => {
+    const second: MemberData = { path: '/two/api', mode: 'reference', title: first.path }
+    const next = addMemberData(space, second)
+    expect(findMember(next, first.path)).toEqual(first)
+    expect(findMember(next, second.path)).toEqual(second)
+    expect(() => findMember(next, 'api')).toThrow('不唯一')
+  })
+
+  it('添加和改名使用同一套显示名冲突规则', () => {
+    expect(() => addMemberData(space, { path: '/two/client', mode: 'reference', title: 'Backend' })).toThrow('冲突')
+    expect(() => addMemberData(space, { path: '/two/Backend', mode: 'reference' })).toThrow('冲突')
+    const second: MemberData = { path: '/two/client', mode: 'reference' }
+    const next = addMemberData(space, second)
+    expect(() => updateMember(next, second, { title: 'api' })).toThrow('冲突')
+  })
+})
 
 const roots: string[] = []
 

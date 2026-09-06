@@ -54,6 +54,7 @@
 
 - [文档索引](docs/README.md)
 - [实现设计](docs/design.md)
+- [交互设计与验收](docs/ui.md)
 - [领域上下文](CONTEXT.md)
 - [架构决策](docs/adr/)
 - [多目录工作区调研](docs/research/)

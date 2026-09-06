@@ -116,7 +116,10 @@ export function memberEntryPath(workspacePath: string, member: MemberData): stri
 
 export function findMember(space: SpaceData, reference: string): MemberData {
   const value = reference.trim()
-  const hits = space.members.filter(member => member.path === value || member.title === value || basename(member.path) === value)
+  const exact = space.members.find(member => member.path === value)
+  if (exact)
+    return exact
+  const hits = space.members.filter(member => member.title === value || basename(member.path) === value)
   if (hits.length === 1)
     return hits[0]!
   if (hits.length > 1)
@@ -124,12 +127,33 @@ export function findMember(space: SpaceData, reference: string): MemberData {
   throw new MemberError(`空间中没有成员「${reference}」`)
 }
 
+/** 成员路径与链接名唯一；同名目录通过完整路径消歧，显式显示名不能占用其他简称 */
+export function assertMemberReferences(members: MemberData[]): void {
+  const paths = new Set<string>()
+  const links = new Set<string>()
+  for (const member of members) {
+    if (paths.has(member.path))
+      throw new MemberError(`含重复成员路径：${member.path}`)
+    paths.add(member.path)
+    if (member.mode === 'link') {
+      if (!member.linkName)
+        throw new MemberError(`link 成员必须设置 linkName：${member.path}`)
+      if (links.has(member.linkName))
+        throw new MemberError(`成员链接名称冲突：${member.linkName}`)
+      links.add(member.linkName)
+    }
+    const title = member.title?.trim()
+    if (title && members.some(other => other !== member && (other.title?.trim() === title || basename(other.path) === title)))
+      throw new MemberError(`成员显示名与现有成员冲突：${title}`)
+  }
+}
+
 export function addMemberData(space: SpaceData, member: MemberData): SpaceData {
-  if (space.members.some(item => item.path === member.path))
-    throw new MemberError(`该目录已经是成员：${member.path}`)
+  const members = [...space.members, member]
+  assertMemberReferences(members)
   return {
     ...space,
-    members: [...space.members, member],
+    members,
     primary: space.primary ?? member.path,
   }
 }
@@ -166,5 +190,6 @@ export function updateMember(space: SpaceData, oldMember: MemberData, patch: Par
     }
     return next
   })
+  assertMemberReferences(members)
   return { ...space, members }
 }

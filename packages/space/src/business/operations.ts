@@ -35,7 +35,10 @@ function clone<T>(value: T): T {
 
 function coreMatch(rows: WorkspaceView[], reference: string): WorkspaceView {
   const value = reference.trim()
-  const matches = rows.filter(row => row.workspaceId === value || row.path === value || row.title === value)
+  const exact = rows.find(row => row.workspaceId === value) ?? rows.find(row => row.path === value)
+  if (exact)
+    return exact
+  const matches = rows.filter(row => row.title === value)
   if (matches.length === 1)
     return matches[0]!
   if (matches.length > 1)
@@ -85,7 +88,12 @@ class SpaceOperationsImpl implements SpaceOperations {
 
   private async coreByPath(path: string): Promise<WorkspaceView | undefined> {
     const canonicalPath = await canonicalize(path) ?? resolve(path)
-    const direct = await this.workspaces.resolveByPath(canonicalPath)
+    const direct = await this.workspaces.resolveByPath(canonicalPath).catch((error: NodeJS.ErrnoException) => {
+      // 核心查询要求目录存在；创建前和目录暂时缺失时仍需检查已有登记
+      if (error.code !== 'ENOENT')
+        throw error
+      return undefined
+    })
     if (direct)
       return direct
     for (const row of this.workspaces.list()) {
@@ -119,7 +127,7 @@ class SpaceOperationsImpl implements SpaceOperations {
     if (kind === 'space' && basename(target) !== basename(key))
       throw new Error(`Space 创建凭据与请求名称不匹配：${path}`)
     const base = basename(key)
-    if (kind === 'chat' && basename(target) !== base && !new RegExp(`^${escapeRegExp(base)}-[2-9]\\d*$`).test(basename(target)))
+    if (kind === 'chat' && basename(target) !== base && !new RegExp(`^${escapeRegExp(base)}-(?:[2-9]|[1-9]\\d+)$`).test(basename(target)))
       throw new Error(`Chat 创建凭据与请求名称不匹配：${path}`)
   }
 
@@ -257,9 +265,6 @@ class SpaceOperationsImpl implements SpaceOperations {
   private async memberTitle(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'title' }>): Promise<Record<string, unknown>> {
     const space = this.requireSpace(current, operation.workspace)
     const member = findMember(space, operation.target)
-    const value = operation.value.trim()
-    if (value && space.members.some(item => item !== member && (item.title === value || basename(item.path) === value)))
-      throw new Error(`成员显示名与现有成员冲突：${value}`)
     const nextSpace = updateMember(space, member, { title: operation.value })
     await this.save({ ...clone(current), spaces: replaceSpace(current.spaces, nextSpace) })
     return { member: findMember(nextSpace, member.path) }
@@ -276,9 +281,6 @@ class SpaceOperationsImpl implements SpaceOperations {
   private async updateMemberDetails(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'update-member' }>): Promise<Record<string, unknown>> {
     const space = this.requireSpace(current, operation.workspace)
     const member = findMember(space, operation.target)
-    const title = operation.title.trim()
-    if (title && space.members.some(item => item !== member && (item.title === title || basename(item.path) === title)))
-      throw new Error(`成员显示名与现有成员冲突：${title}`)
     const nextSpace = updateMember(space, member, { title: operation.title, description: operation.description })
     await this.save({ ...clone(current), spaces: replaceSpace(current.spaces, nextSpace) })
     return { member: findMember(nextSpace, member.path) }

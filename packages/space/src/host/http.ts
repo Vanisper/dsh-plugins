@@ -70,21 +70,26 @@ export function parseOperation(value: unknown): SpaceOperation {
 
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    let body = ''
+    const chunks: Buffer[] = []
+    let size = 0
     let tooLarge = false
     req.on('data', (chunk: Buffer | string) => {
-      body += chunk.toString()
-      if (Buffer.byteLength(body) > MAX_BODY && !tooLarge) {
+      if (tooLarge)
+        return
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      size += bytes.length
+      if (size > MAX_BODY) {
         tooLarge = true
         reject(new Error('请求体过大'))
-        req.destroy()
+        return
       }
+      chunks.push(bytes)
     })
     req.on('end', () => {
       if (tooLarge)
         return
       try {
-        resolve(JSON.parse(body || '{}'))
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'))
       }
       catch {
         reject(new Error('请求体不是有效 JSON'))

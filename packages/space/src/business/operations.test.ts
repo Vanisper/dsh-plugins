@@ -4,6 +4,7 @@ import type { SpaceSettings, WorkspaceView } from './types.ts'
 import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import { afterEach, describe, expect, it } from 'vitest'
 import { canonicalize } from '../shared/fs-path.ts'
 import { chatsDir, localDateName, spacesDir } from '../shared/paths.ts'
@@ -84,6 +85,25 @@ async function exists(path: string): Promise<boolean> {
 }
 
 describe('create space', () => {
+  it.each(['create-space', 'create-chat'] as const)('通过官方路径查询契约执行 %s', async (op) => {
+    const root = await temporaryRoot()
+    const workspaces = fakeWorkspaces()
+    workspaces.resolveByPath = path => WorkspaceRegistry.prototype.resolveByPath.call({ entities: new Map() } as unknown as WorkspaceRegistry, path)
+      .then(() => undefined)
+
+    await expect(createSpaceOperations(fakeStore(root), workspaces).execute({ op, name: 'demo' })).resolves.toHaveProperty(op === 'create-space' ? 'space' : 'chat')
+    expect(workspaces.rows).toHaveLength(1)
+  })
+
+  it('保留路径查询的非缺失错误', async () => {
+    const workspaces = fakeWorkspaces()
+    workspaces.resolveByPath = async () => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    }
+    await expect(createSpaceOperations(fakeStore(await temporaryRoot()), workspaces).execute({ op: 'create-space', name: 'demo' })).rejects.toThrow('permission denied')
+    expect(workspaces.rows).toEqual([])
+  })
+
   it('validates all input before creating the managed directory', async () => {
     const root = await temporaryRoot()
     const store = fakeStore(root)
@@ -148,6 +168,20 @@ describe('create space', () => {
 })
 
 describe('create chat', () => {
+  it.each([10, 19, 100])('设置写入失败后可恢复编号为 %i 的同名对话', async (suffix) => {
+    const root = await temporaryRoot()
+    const path = join(chatsDir(root), localDateName(), 'topic')
+    for (let index = 1; index < suffix; index++)
+      await mkdir(index === 1 ? path : `${path}-${index}`, { recursive: true })
+    const store = fakeStore(root)
+    const workspaces = fakeWorkspaces()
+    const operations = createSpaceOperations(store, workspaces)
+    store.failNextReplace = true
+    await expect(operations.execute({ op: 'create-chat', name: 'topic' })).rejects.toThrow('settings write failed')
+    await expect(operations.execute({ op: 'create-chat', name: 'topic' })).resolves.toHaveProperty('chat.workspaceId', 'workspace-1')
+    expect(workspaces.rows).toHaveLength(1)
+  })
+
   it('keeps the core row, removes an empty directory, and reuses both identity and path on retry', async () => {
     const root = await temporaryRoot()
     const store = fakeStore(root)

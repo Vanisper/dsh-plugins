@@ -8,7 +8,7 @@ async function responseJson(response: Response): Promise<Record<string, unknown>
 }
 
 export async function fetchRegistry(signal?: AbortSignal): Promise<RegistryPayload> {
-  return await responseJson(await fetch('/api/dsh-space/registry', { signal })) as unknown as RegistryPayload
+  return await responseJson(await fetch('/api/dsh-space/registry', { signal, cache: 'no-store' })) as unknown as RegistryPayload
 }
 
 export async function runOperation(body: Record<string, unknown>): Promise<Record<string, unknown>> {

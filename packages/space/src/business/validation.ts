@@ -1,6 +1,7 @@
 import type { MemberData, SpaceData, SpaceSettings } from './types.ts'
 import { isAbsolute } from 'node:path'
 import { assertPathSegment } from '../shared/paths.ts'
+import { assertMemberReferences } from './member.ts'
 
 const MEMBER_KEYS = new Set(['path', 'mode', 'linkName', 'title', 'description'])
 const SPACE_KEYS = new Set(['workspaceId', 'primary', 'members'])
@@ -61,12 +62,8 @@ function validateSpace(value: unknown, index: number): SpaceData {
   if (!Array.isArray(value.members))
     throw new Error(`空间记录 ${index + 1} 的 members 必须是数组`)
   const members = value.members.map((member, memberIndex) => validateMember(member, memberIndex))
-  const paths = new Set<string>()
-  for (const member of members) {
-    if (paths.has(member.path))
-      throw new Error(`空间记录 ${workspaceId} 含重复成员路径：${member.path}`)
-    paths.add(member.path)
-  }
+  assertMemberReferences(members)
+  const paths = new Set(members.map(member => member.path))
   if (value.primary !== undefined) {
     const primary = requiredString(value.primary, `空间记录 ${index + 1} 的 primary`)
     if (!paths.has(primary))

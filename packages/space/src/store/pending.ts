@@ -1,4 +1,5 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { link, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
 export type CreationKind = 'space' | 'chat'
@@ -11,6 +12,29 @@ export interface PendingCreation {
 
 function markerPath(target: string): string {
   return join(dirname(target), `.${basename(target)}.dsh-space-pending.json`)
+}
+
+async function publishPendingCreation(key: string, pending: PendingCreation, exclusive: boolean): Promise<void> {
+  const marker = markerPath(key)
+  const temporary = `${marker}.${randomUUID()}.tmp`
+  const file = await open(temporary, 'wx', 0o600)
+  try {
+    try {
+      await file.writeFile(`${JSON.stringify(pending)}\n`, 'utf8')
+      await file.sync()
+    }
+    finally {
+      await file.close()
+    }
+    // 首次发布不能覆盖他人的凭据；更新只替换已经完整落盘的文件
+    if (exclusive)
+      await link(temporary, marker)
+    else
+      await rename(temporary, marker)
+  }
+  finally {
+    await rm(temporary, { force: true })
+  }
 }
 
 function parsePendingCreation(raw: string, expectedKind: CreationKind, target: string): PendingCreation {
@@ -49,13 +73,13 @@ export async function readPendingCreation(target: string, kind: CreationKind): P
 export async function startPendingCreation(key: string, kind: CreationKind, target = key): Promise<PendingCreation> {
   const pending: PendingCreation = { kind, path: target }
   await mkdir(dirname(key), { recursive: true })
-  await writeFile(markerPath(key), `${JSON.stringify(pending)}\n`, { encoding: 'utf8', flag: 'wx' })
+  await publishPendingCreation(key, pending, true)
   return pending
 }
 
 /** 更新创建进度，供失败后的下一次调用确定性恢复 */
 export async function savePendingCreation(target: string, pending: PendingCreation): Promise<void> {
-  await writeFile(markerPath(target), `${JSON.stringify(pending)}\n`, 'utf8')
+  await publishPendingCreation(target, pending, false)
 }
 
 /** 删除已经完成或确定回滚的创建凭据 */

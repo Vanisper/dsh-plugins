@@ -125,7 +125,8 @@ class SpaceOperationsImpl implements SpaceOperations {
 
   private async validatePendingPath(kind: 'space' | 'chat', key: string, path: string): Promise<void> {
     const expectedParent = await canonicalize(dirname(key)) ?? resolve(dirname(key))
-    const target = await canonicalize(path) ?? resolve(path)
+    const parent = await canonicalize(dirname(path)) ?? resolve(dirname(path))
+    const target = await canonicalize(path) ?? join(parent, basename(path))
     if (!isUnder(target, expectedParent) || dirname(target) !== expectedParent)
       throw new Error(`创建凭据中的路径超出托管目录：${path}`)
     if (kind === 'space' && basename(target) !== basename(key))
@@ -338,7 +339,9 @@ class SpaceOperationsImpl implements SpaceOperations {
       if (creationId) {
         const parent = dirname(pending.path)
         const rootPath = await canonicalize(chatsDir(root)) ?? resolve(chatsDir(root))
-        if (dirname(parent) !== rootPath || !/^\d{4}-\d{2}-\d{2}$/.test(basename(parent)))
+        const pendingRoot = await canonicalize(dirname(parent)) ?? resolve(dirname(parent))
+        const canonicalParent = await canonicalize(parent)
+        if (pendingRoot !== rootPath || (canonicalParent && dirname(canonicalParent) !== rootPath) || !/^\d{4}-\d{2}-\d{2}$/.test(basename(parent)))
           throw new Error(`创建凭据中的路径超出日期对话目录：${pending.path}`)
         await this.validatePendingPath('chat', join(parent, slugify(name ?? 'new-chat')), pending.path)
       }

@@ -112,12 +112,42 @@ describe('create space', () => {
     expect(workspaces.rows).toHaveLength(1)
   })
 
+  it.each([false, true])('请求创建凭据在建目录前中断，跨日期和路径别名仍恢复原目录（日期目录存在：%s）', async (parentExists) => {
+    const root = await temporaryRoot()
+    const alias = join(await temporaryRoot(), 'alias')
+    await symlink(root, alias)
+    const creationId = '081a2d14-98a9-487d-9068-ab3ec9ebec94'
+    const original = join(chatsDir(alias), '2020-01-01', 'new-chat')
+    if (parentExists)
+      await mkdir(join(chatsDir(alias), '2020-01-01'), { recursive: true })
+    await startPendingCreation(join(chatsDir(alias), `request-${creationId}`), 'chat', original)
+    const workspaces = fakeWorkspaces()
+    await createSpaceOperations(fakeStore(alias), workspaces).execute({ op: 'create-chat', creationId })
+    expect(workspaces.rows).toHaveLength(1)
+    expect(workspaces.rows[0]?.path).toBe(await canonicalize(original))
+    expect(workspaces.rows[0]?.path).toContain('2020-01-01')
+  })
+
   it('无效请求标识在任何目录或核心写入前拒绝', async () => {
     const workspaces = fakeWorkspaces()
     const operations = createSpaceOperations(fakeStore(await temporaryRoot()), workspaces)
     await expect(operations.execute({ op: 'create-chat', creationId: '../escape' })).rejects.toThrow('UUID')
     await expect(operations.execute({ op: 'create-chat', creationId: '' })).rejects.toThrow('UUID')
     expect(workspaces.rows).toHaveLength(0)
+  })
+
+  it('请求创建凭据不能通过日期目录的符号链接写出托管根', async () => {
+    const root = await temporaryRoot()
+    const outside = await temporaryRoot()
+    const parent = join(chatsDir(root), '2020-01-01')
+    await mkdir(chatsDir(root), { recursive: true })
+    await symlink(outside, parent)
+    const creationId = '081a2d14-98a9-487d-9068-ab3ec9ebec95'
+    await startPendingCreation(join(chatsDir(root), `request-${creationId}`), 'chat', join(parent, 'new-chat'))
+    const workspaces = fakeWorkspaces()
+    await expect(createSpaceOperations(fakeStore(root), workspaces).execute({ op: 'create-chat', creationId })).rejects.toThrow('超出日期对话目录')
+    expect(workspaces.rows).toHaveLength(0)
+    expect(await readdir(outside)).toEqual([])
   })
 
   it.each(['create-space', 'create-chat'] as const)('通过官方路径查询契约执行 %s', async (op) => {

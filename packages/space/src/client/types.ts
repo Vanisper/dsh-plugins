@@ -14,6 +14,7 @@ export interface RegistryItem {
   sessionIds: string[]
   members?: MemberItem[]
   primary?: string
+  revision?: string
 }
 
 export interface RegistryPayload {
@@ -111,8 +112,8 @@ export interface SlotProps {
 }
 
 export interface SlotsService {
-  inject: (key: string, factory: () => unknown) => unknown
-  register: (definition: Record<string, unknown>, component: (props: SlotProps) => unknown) => unknown
+  inject: (key: string, factory: () => (() => void)) => () => void
+  register: (definition: Record<string, unknown>, component: (props: SlotProps) => unknown) => () => void
 }
 
 export interface ClientServices {

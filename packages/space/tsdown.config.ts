@@ -14,6 +14,7 @@ export default defineConfig([
   },
   {
     entry: ['src/client/client.ts'],
+    noExternal: ['lucide'],
     format: ['esm'],
     platform: 'browser',
     target: 'es2022',

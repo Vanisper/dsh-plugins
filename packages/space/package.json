@@ -60,6 +60,12 @@
     "@deepseek-ai/dsh-system-prompt": "catalog:dsh",
     "@deepseek-ai/dsh-workspace": "catalog:dsh",
     "@types/node": "^22.10.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "jsdom": "^26.1.0",
+    "lucide": "0.468.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tsdown": "catalog:dev",
     "typescript": "catalog:dev",
     "vitest": "catalog:dev"

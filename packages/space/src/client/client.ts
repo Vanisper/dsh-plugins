@@ -1,5 +1,7 @@
 import type { ReactLike, SessionService, SlotsService, WorkspaceService } from './types.ts'
-import { createSidebar, sidebarCss } from './sidebar.ts'
+import { createModeControl, createModeStore, installSidebarMode } from './mode.ts'
+import { createSidebar } from './sidebar.ts'
+import { sidebarCss } from './styles.ts'
 
 interface ClientContext {
   get: (name: string) => unknown
@@ -26,19 +28,12 @@ loader?.load({
       if (!slots || !sessions || !workspaces)
         return
 
-      ctx.effect(() => {
-        const style = document.createElement('style')
-        style.dataset.plugin = 'dsh-space'
-        style.textContent = sidebarCss
-        document.head.appendChild(style)
-        return () => style.remove()
-      }, 'dsh-space sidebar styles')
-
-      const Sidebar = createSidebar(React, sessions, workspaces)
-      slots.inject('sidebar.workspaces', () => slots.register({
-        name: 'sidebar.workspaces',
-        priority: -10,
-      }, Sidebar))
+      const mode = createModeStore()
+      const Sidebar = createSidebar(React, sessions, workspaces, mode)
+      const ModeControl = createModeControl(React, mode)
+      ctx.effect(() => mode.listen(), 'dsh-space display preference')
+      ctx.effect(() => installSidebarMode(slots, mode, Sidebar, sidebarCss), 'dsh-space sidebar mode')
+      slots.inject('sidebar.footer.action', () => slots.register({ name: 'sidebar.footer.action', id: 'dsh-space-mode' }, ModeControl))
     }
     return module.exports
   },

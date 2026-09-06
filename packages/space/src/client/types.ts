@@ -91,12 +91,14 @@ export interface SessionService {
   search: (query: string, signal: AbortSignal) => Promise<RpcResult<{ items: SessionSearchResult[], hasMore: boolean }>>
   fork: (input: { sessionId: string, increaseTitle?: boolean }) => Promise<string>
   binding: (id: string) => SessionBinding | undefined
+  scope: (id: string) => unknown
 }
 
 export interface WorkspaceService {
   list: ObservableSnapshot<WorkspaceSnapshot>
   refresh: () => Promise<void>
   startSession: (workspaceId?: string) => void
+  connectWorkspace: (workspaceId: string) => Promise<string>
   create: (input: { path: string }) => Promise<CoreWorkspace>
   pickDirectory: () => Promise<string | null>
   openPath: (path: string) => Promise<void>
@@ -114,7 +116,20 @@ export interface SlotProps {
 
 export interface SlotsService {
   inject: (key: string, factory: () => (() => void)) => () => void
-  register: (definition: Record<string, unknown>, component: (props: SlotProps) => unknown) => () => void
+  register: <P>(definition: Record<string, unknown>, component: (props: P) => unknown) => () => void
+}
+
+/** 宿主会话输入的公开交接面，不调用私有附件或输入实现 */
+export interface ConversationService {
+  input: {
+    for: (scope: unknown) => {
+      state: ObservableSnapshot<{ draft: string, imageIds: readonly string[], phase: string }>
+      setDraft: (text: string) => void
+      submit: () => void
+      notify: (level: 'info' | 'error', text: string) => void
+    }
+  }
+  blocks: { storeFor: (id: string) => ObservableSnapshot<{ reason: string } | undefined> }
 }
 
 export interface ClientServices {

@@ -12,6 +12,7 @@ import { chatTitle } from './chat.ts'
 import { descriptionsOf, projectDescriptions } from './lookup.ts'
 import { prepareMemberDraft, spaceRevision } from './member-draft.ts'
 import { addMemberData, ensureMemberLink, existingDirectory, findMember, memberData, removeMemberData, removeMemberLink, updateMember } from './member.ts'
+import { validateCreationId } from './validation.ts'
 
 export type SpaceOperation
   = { op: 'create-space', name: string, folder?: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string, members?: MemberInput[], primary?: string }
@@ -23,7 +24,7 @@ export type SpaceOperation
     | { op: 'title', workspace: string, target: string, value: string }
     | { op: 'description', workspace: string, target: string, value: string }
     | { op: 'update-member', workspace: string, target: string, title: string, description: string }
-    | { op: 'create-chat', name?: string }
+    | { op: 'create-chat', name?: string, creationId?: string }
     | { op: 'drop-space', workspace: string }
     | { op: 'drop-chat', workspace: string }
 
@@ -146,7 +147,7 @@ class SpaceOperationsImpl implements SpaceOperations {
       case 'title': return this.memberTitle(current, operation)
       case 'description': return this.memberDescription(current, operation)
       case 'update-member': return this.updateMemberDetails(current, operation)
-      case 'create-chat': return this.createChat(current, operation.name)
+      case 'create-chat': return this.createChat(current, operation.name, operation.creationId)
       case 'drop-space': return this.drop(current, operation.workspace, 'space')
       case 'drop-chat': return this.drop(current, operation.workspace, 'chat')
     }
@@ -316,10 +317,16 @@ class SpaceOperationsImpl implements SpaceOperations {
     return { member: findMember(nextSpace, member.path) }
   }
 
-  private async createChat(current: SpaceSettings, name?: string): Promise<Record<string, unknown>> {
+  private async createChat(current: SpaceSettings, name?: string, creationId?: string): Promise<Record<string, unknown>> {
+    if (creationId !== undefined) {
+      creationId = validateCreationId(creationId)
+      const existing = current.chats.find(chat => chat.creationId === creationId)
+      if (existing)
+        return { chat: this.chatView(this.requireCore(existing.workspaceId), existing) }
+    }
     const root = this.store.root()
     const basePath = join(chatsDir(root), localDateName(), slugify(name ?? 'new-chat'))
-    const key = basePath
+    const key = creationId ? join(chatsDir(root), `request-${creationId}`) : basePath
     let pending = await readPendingCreation(key, 'chat')
     let target: string
     let createdDirectory = false
@@ -328,7 +335,16 @@ class SpaceOperationsImpl implements SpaceOperations {
       pending = await startPendingCreation(key, 'chat', target)
     }
     else {
-      await this.validatePendingPath('chat', key, pending.path)
+      if (creationId) {
+        const parent = dirname(pending.path)
+        const rootPath = await canonicalize(chatsDir(root)) ?? resolve(chatsDir(root))
+        if (dirname(parent) !== rootPath || !/^\d{4}-\d{2}-\d{2}$/.test(basename(parent)))
+          throw new Error(`创建凭据中的路径超出日期对话目录：${pending.path}`)
+        await this.validatePendingPath('chat', join(parent, slugify(name ?? 'new-chat')), pending.path)
+      }
+      else {
+        await this.validatePendingPath('chat', key, pending.path)
+      }
       target = pending.path
     }
     if (!await canonicalize(target))
@@ -358,7 +374,7 @@ class SpaceOperationsImpl implements SpaceOperations {
       await finishPendingCreation(key)
       throw new Error(`对话工作区「${core.title}」已经登记`)
     }
-    const chat: ChatData = { workspaceId: core.workspaceId }
+    const chat: ChatData = { workspaceId: core.workspaceId, ...(creationId ? { creationId } : {}) }
     try {
       await this.save({ ...clone(current), chats: [...current.chats, chat] })
       await finishPendingCreation(key).catch(error => this.log(`[dsh-space] 清理已完成创建凭据失败：${(error as Error).message}`))

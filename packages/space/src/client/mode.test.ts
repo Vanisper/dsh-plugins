@@ -10,6 +10,17 @@ afterEach(() => {
 })
 
 describe('工作区模式生命周期', () => {
+  it('侧栏与准备页分别释放占用，不相互解锁', () => {
+    const mode = createModeStore()
+    mode.setBlocked(true)
+    mode.setBlocked(true, 'preparation')
+    mode.setMode('official')
+    mode.setBlocked(false)
+    expect(mode.getSnapshot()).toEqual({ mode: 'space', blocked: true })
+    mode.setBlocked(false, 'preparation')
+    expect(mode.getSnapshot()).toEqual({ mode: 'official', blocked: false })
+  })
+
   it('双向切换释放增强注册与样式，重复切换不会重复装载', () => {
     const unregister = vi.fn()
     const slots: SlotsService = {

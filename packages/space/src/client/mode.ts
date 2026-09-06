@@ -8,7 +8,7 @@ export interface ModeStore {
   getSnapshot: () => { mode: SidebarMode, blocked: boolean }
   subscribe: (listener: () => void) => () => void
   setMode: (mode: SidebarMode) => void
-  setBlocked: (blocked: boolean) => void
+  setBlocked: (blocked: boolean, owner?: string) => void
   listen: () => () => void
 }
 
@@ -26,6 +26,7 @@ export function createModeStore(): ModeStore {
   let snapshot = { mode: readMode(), blocked: false }
   let pending: SidebarMode | undefined
   const listeners = new Set<() => void>()
+  const blockers = new Set<string>()
   const publish = (): void => listeners.forEach(listener => listener())
   const change = (mode: SidebarMode): void => {
     if (snapshot.blocked) {
@@ -54,12 +55,17 @@ export function createModeStore(): ModeStore {
         /* 存储受限时保留当前页面偏好 */
       }
     },
-    setBlocked(blocked: boolean): void {
-      if (snapshot.blocked === blocked)
+    setBlocked(blocked: boolean, owner = 'sidebar'): void {
+      if (blocked)
+        blockers.add(owner)
+      else
+        blockers.delete(owner)
+      const nextBlocked = blockers.size > 0
+      if (snapshot.blocked === nextBlocked)
         return
-      snapshot = { ...snapshot, blocked }
+      snapshot = { ...snapshot, blocked: nextBlocked }
       publish()
-      if (!blocked && pending) {
+      if (!nextBlocked && pending) {
         const next = pending
         pending = undefined
         change(next)

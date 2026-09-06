@@ -15,7 +15,7 @@ interface WebServerLike {
 }
 
 const MAX_BODY = 256 * 1024
-const operationKeys = new Set(['op', 'name', 'folder', 'mode', 'linkName', 'title', 'description', 'workspace', 'target', 'value', 'members', 'primary', 'expectedRevision'])
+const operationKeys = new Set(['op', 'name', 'folder', 'mode', 'linkName', 'title', 'description', 'workspace', 'target', 'value', 'members', 'primary', 'expectedRevision', 'creationId'])
 const memberKeys = new Set(['path', 'mode', 'linkName', 'title', 'description'])
 
 function parseMembers(value: unknown): MemberInput[] {
@@ -77,7 +77,7 @@ export function parseOperation(value: unknown): SpaceOperation {
     case 'title': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), value: optionalString(body.value, 'value') ?? '' }
     case 'description': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), value: optionalString(body.value, 'value') ?? '' }
     case 'update-member': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), title: optionalString(body.title, 'title') ?? '', description: optionalString(body.description, 'description') ?? '' }
-    case 'create-chat': return { op, name: optionalString(body.name, 'name') }
+    case 'create-chat': return { op, name: optionalString(body.name, 'name'), creationId: optionalString(body.creationId, 'creationId') }
     case 'drop-space': return { op, workspace: requiredString(body, 'workspace') }
     case 'drop-chat': return { op, workspace: requiredString(body, 'workspace') }
     default: throw new Error(`未知操作：${op}`)

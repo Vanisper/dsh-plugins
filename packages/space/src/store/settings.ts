@@ -22,6 +22,7 @@ const SpaceSchema = z.object({
 
 const ChatSchema = z.object({
   workspaceId: z.string().required(),
+  creationId: z.string(),
 })
 
 const SettingsSchema = z.object({

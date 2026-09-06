@@ -86,6 +86,40 @@ async function exists(path: string): Promise<boolean> {
 }
 
 describe('create space', () => {
+  it('独立对话创建响应丢失后按请求标识重试，不重复注册目录', async () => {
+    const root = await temporaryRoot()
+    const store = fakeStore(root)
+    const workspaces = fakeWorkspaces()
+    const creationId = '081a2d14-98a9-487d-9068-ab3ec9ebec92'
+    const first = await createSpaceOperations(store, workspaces).execute({ op: 'create-chat', creationId })
+    const second = await createSpaceOperations(store, workspaces).execute({ op: 'create-chat', creationId })
+    expect(second).toEqual(first)
+    expect(workspaces.rows).toHaveLength(1)
+    expect(store.value.chats).toEqual([{ workspaceId: 'workspace-1', creationId }])
+    workspaces.rows = []
+    await expect(createSpaceOperations(store, workspaces).execute({ op: 'create-chat', creationId })).rejects.toThrow('核心工作区已不存在')
+    expect(workspaces.rows).toHaveLength(0)
+  })
+
+  it('带请求标识的独立对话在描述写入失败后复用创建凭据', async () => {
+    const root = await temporaryRoot()
+    const store = fakeStore(root)
+    const workspaces = fakeWorkspaces()
+    const operation = { op: 'create-chat' as const, creationId: '081a2d14-98a9-487d-9068-ab3ec9ebec93' }
+    store.failNextReplace = true
+    await expect(createSpaceOperations(store, workspaces).execute(operation)).rejects.toThrow('settings write failed')
+    await expect(createSpaceOperations(store, workspaces).execute(operation)).resolves.toHaveProperty('chat.workspaceId', 'workspace-1')
+    expect(workspaces.rows).toHaveLength(1)
+  })
+
+  it('无效请求标识在任何目录或核心写入前拒绝', async () => {
+    const workspaces = fakeWorkspaces()
+    const operations = createSpaceOperations(fakeStore(await temporaryRoot()), workspaces)
+    await expect(operations.execute({ op: 'create-chat', creationId: '../escape' })).rejects.toThrow('UUID')
+    await expect(operations.execute({ op: 'create-chat', creationId: '' })).rejects.toThrow('UUID')
+    expect(workspaces.rows).toHaveLength(0)
+  })
+
   it.each(['create-space', 'create-chat'] as const)('通过官方路径查询契约执行 %s', async (op) => {
     const root = await temporaryRoot()
     const workspaces = fakeWorkspaces()

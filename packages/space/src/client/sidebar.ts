@@ -28,6 +28,7 @@ type Dialog
   = | { type: 'create-space' }
     | { type: 'add-directory' }
     | { type: 'invalid' }
+    | { type: 'drop-invalid', kind: 'space' | 'chat', workspaceId: string }
     | { type: 'rename-workspace', item: RegistryItem }
     | { type: 'delete-workspace', item: RegistryItem }
     | { type: 'drop-description', item: RegistryItem }
@@ -267,13 +268,10 @@ export function createSidebar(
       mode.setBlocked(true)
       setBusy(true)
       setError(undefined)
-      void task()
-        .then(() => after?.())
-        .catch(cause => setError(message(cause)))
-        .finally(() => {
-          busyRef.current = false
-          setBusy(false)
-        })
+      void Promise.resolve().then(task).then(() => after?.()).catch(cause => setError(message(cause))).finally(() => {
+        busyRef.current = false
+        setBusy(false)
+      })
     }
     const startCreated = async (id: string): Promise<void> => {
       refresh()
@@ -351,6 +349,7 @@ export function createSidebar(
         {
           label: '分叉会话',
           icon: 'fork',
+          disabled: session.blank,
           run: () =>
             perform(async () =>
               sessions.open(
@@ -502,7 +501,7 @@ export function createSidebar(
           e(
             'span',
             { className: 'dsh-space-session-title' },
-            session.blank ? '新会话' : session.displayTitle,
+            session.displayTitle || '新会话',
           ),
           session.runningSubagentCount
             ? e(
@@ -640,9 +639,11 @@ export function createSidebar(
           Modal,
           {
             ...props,
-            title: '创建空间',
+            title: createdId.current ? '空间已创建' : '创建空间',
             onSubmit: createSpace,
-            submitDisabled: !text.trim(),
+            submitDisabled: !createdId.current && !text.trim(),
+            fieldsDisabled: !!createdId.current,
+            cancelLabel: createdId.current ? '关闭' : '取消',
             submitLabel: createdId.current ? '进入工作区' : '创建空间',
           },
           input('空间名称'),
@@ -681,9 +682,10 @@ export function createSidebar(
               'div',
               { className: 'dsh-space-path-field' },
               e('input', {
-                autoFocus: true,
-                value: text,
-                onChange: (event: { target: HTMLInputElement }) =>
+                'aria-label': '目录完整路径',
+                'autoFocus': true,
+                'value': text,
+                'onChange': (event: { target: HTMLInputElement }) =>
                   setText(event.target.value),
               }),
               e(IconButton, {
@@ -845,18 +847,43 @@ export function createSidebar(
                   e(IconButton, {
                     icon: 'remove',
                     label: `清理 ${row.workspaceId}`,
-                    onClick: () =>
-                      runOp(
-                        {
-                          op: kind === 'space' ? 'drop-space' : 'drop-chat',
-                          workspace: row.workspaceId,
-                        },
-                        '失效描述已清理',
-                      ),
+                    onClick: () => begin({
+                      type: 'drop-invalid',
+                      kind,
+                      workspaceId: row.workspaceId,
+                    }),
                   }),
                 ),
               ) ?? [],
           ),
+        )
+      }
+      if (dialog.type === 'drop-invalid') {
+        return e(
+          Modal,
+          {
+            ...props,
+            title: '清理失效描述',
+            danger: true,
+            submitLabel: '确认清理',
+            submitDisabled: !registry,
+            onSubmit: () => perform(async () => {
+              const fresh = await fetchRegistry()
+              const invalid = dialog.kind === 'space' ? fresh.invalidSpaces : fresh.invalidChats
+              if (!invalid.some(row => row.workspaceId === dialog.workspaceId))
+                throw new Error('记录状态已变更，请关闭后重新检查')
+              await runOperation({
+                op: dialog.kind === 'space' ? 'drop-space' : 'drop-chat',
+                workspace: dialog.workspaceId,
+              })
+              refresh()
+            }, () => {
+              setDialog(null)
+              setNotice('失效描述已清理')
+            }),
+          },
+          e('code', { className: 'dsh-space-muted' }, dialog.workspaceId),
+          e('p', null, '只清理这条附加描述。目录、源文件、符号链接与会话日志都会保留。'),
         )
       }
       if (!('item' in dialog))
@@ -870,9 +897,19 @@ export function createSidebar(
           title: deleting ? '移除工作区' : '移除附加描述',
           danger: deleting,
           submitLabel: deleting ? '移除工作区' : '转为普通目录',
+          submitDisabled: !registry,
           onSubmit: () =>
             perform(
               async () => {
+                const fresh = await fetchRegistry()
+                const current = fresh.items.find(row => row.workspaceId === item.workspaceId)
+                if (descriptionRemoved.current !== item.workspaceId) {
+                  if (!current || current.kind !== item.kind || current.revision !== item.revision)
+                    throw new Error('工作区描述已变更，请关闭后重新检查')
+                }
+                else if (current?.kind !== 'plain') {
+                  throw new Error('核心登记或附加描述已变更，请关闭后重新检查')
+                }
                 if (
                   item.kind !== 'plain'
                   && descriptionRemoved.current !== item.workspaceId
@@ -959,7 +996,8 @@ export function createSidebar(
               {
                 type: 'button',
                 className: 'dsh-space-button',
-                onClick: () => window.location.reload(),
+                disabled: busy,
+                onClick: () => perform(() => workspaces.refresh()),
               },
               '重新连接',
             ),
@@ -1133,6 +1171,7 @@ export function createSidebar(
                     {
                       className: 'dsh-space-notice dsh-space-error',
                       role: 'alert',
+                      title: remoteSearch.error,
                     },
                     '全文搜索暂不可用，已保留标题匹配。',
                     e(IconButton, {

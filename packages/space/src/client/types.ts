@@ -95,6 +95,7 @@ export interface SessionService {
 
 export interface WorkspaceService {
   list: ObservableSnapshot<WorkspaceSnapshot>
+  refresh: () => Promise<void>
   startSession: (workspaceId?: string) => void
   create: (input: { path: string }) => Promise<CoreWorkspace>
   pickDirectory: () => Promise<string | null>

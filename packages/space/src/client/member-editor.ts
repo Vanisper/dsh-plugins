@@ -162,6 +162,11 @@ export function createMemberEditor(
                 'div',
                 { className: 'dsh-space-member-fields' },
                 e(
+                  'div',
+                  { className: 'full dsh-space-muted' },
+                  e('code', null, member.path),
+                ),
+                e(
                   'label',
                   null,
                   '显示名称',

@@ -84,6 +84,8 @@ interface ModalProps {
   onSubmit?: () => void
   submitLabel?: string
   submitDisabled?: boolean
+  fieldsDisabled?: boolean
+  cancelLabel?: string
   danger?: boolean
 }
 interface Controls {
@@ -272,24 +274,18 @@ export function createControls(React: ReactLike): Controls {
     onSubmit,
     submitLabel = '保存',
     submitDisabled,
+    fieldsDisabled,
+    cancelLabel,
     danger,
-  }: {
-    title: string
-    busy: boolean
-    error?: string
-    children?: unknown
-    onClose: () => void
-    onSubmit?: () => void
-    submitLabel?: string
-    submitDisabled?: boolean
-    danger?: boolean
-  }): unknown {
+  }: ModalProps): unknown {
     const dialog = React.useRef<HTMLDialogElement | null>(null)
     React.useEffect(() => {
       const previous = document.activeElement as HTMLElement | null
       const element = dialog.current!
       element.showModal()
-      element.querySelector<HTMLElement>('input:not(:disabled), textarea:not(:disabled), select:not(:disabled)')?.focus()
+      Array.from(element.querySelectorAll<HTMLElement>('input:not(:disabled), textarea:not(:disabled), select:not(:disabled)'))
+        .find(input => !input.closest('details:not([open])') && input.getClientRects().length > 0)
+        ?.focus()
       return () => {
         element.close()
         if (previous?.isConnected)
@@ -331,9 +327,13 @@ export function createControls(React: ReactLike): Controls {
           }),
         ),
         e(
-          'fieldset',
-          { className: 'dsh-space-fields', disabled: busy },
-          children,
+          'div',
+          { className: 'dsh-space-dialog-body' },
+          e(
+            'fieldset',
+            { className: 'dsh-space-fields', disabled: busy || fieldsDisabled },
+            children,
+          ),
         ),
         error
           ? e(
@@ -353,7 +353,7 @@ export function createControls(React: ReactLike): Controls {
               disabled: busy,
               onClick: onClose,
             },
-            onSubmit ? '取消' : '关闭',
+            cancelLabel ?? (onSubmit ? '取消' : '关闭'),
           ),
           onSubmit
             ? e(

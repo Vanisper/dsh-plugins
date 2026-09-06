@@ -1,19 +1,25 @@
 import type { ReactLike } from './types.ts'
 import {
   Archive,
+  ArchiveRestore,
   ArrowDown,
   ArrowUp,
   Check,
   ChevronDown,
   ChevronRight,
+  Clock,
   Ellipsis,
   Folder,
   FolderOpen,
   FolderPlus,
   GitFork,
+  Hash,
   Info,
   Layers,
+  ListFilter,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   Pencil,
   Pin,
   PinOff,
@@ -29,6 +35,12 @@ import {
 
 const icons = {
   archive: Archive,
+  restore: ArchiveRestore,
+  clock: Clock,
+  hash: Hash,
+  filter: ListFilter,
+  expand: Maximize2,
+  collapse: Minimize2,
   down: ArrowDown,
   up: ArrowUp,
   check: Check,
@@ -62,6 +74,7 @@ export interface MenuAction {
   run: () => void
   disabled?: boolean
   danger?: boolean
+  checked?: boolean
 }
 
 interface IconProps {
@@ -253,12 +266,13 @@ export function createControls(React: ReactLike): Controls {
           e(
             'button',
             {
-              type: 'button',
-              role: 'menuitem',
-              key: action.label,
-              disabled: action.disabled,
-              className: action.danger ? 'danger' : undefined,
-              onClick: () => {
+              'type': 'button',
+              'role': action.checked === undefined ? 'menuitem' : 'menuitemradio',
+              'aria-checked': action.checked,
+              'key': action.label,
+              'disabled': action.disabled,
+              'className': action.danger ? 'danger' : undefined,
+              'onClick': () => {
                 close()
                 trigger.current?.focus()
                 action.run()
@@ -266,6 +280,7 @@ export function createControls(React: ReactLike): Controls {
             },
             e(Icon, { name: action.icon }),
             action.label,
+            action.checked ? e('span', { className: 'dsh-space-menu-check' }, e(Icon, { name: 'check', size: 14 })) : null,
           ),
         ),
       ),

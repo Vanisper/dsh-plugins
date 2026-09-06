@@ -10,6 +10,7 @@ import { act, createElement } from 'react'
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createLayoutStore } from './layout.ts'
 import { createModeStore } from './mode.ts'
 import { createSidebar } from './sidebar.ts'
 
@@ -146,11 +147,8 @@ async function mount(wide = true) {
 }
 
 function button(label: string): HTMLButtonElement {
-  const button = Array.from(document.querySelectorAll('button')).find(
-    button =>
-      button.getAttribute('aria-label') === label
-      || button.textContent === label,
-  )
+  const buttons = Array.from((document.querySelector('dialog') ?? document).querySelectorAll('button'))
+  const button = buttons.find(button => button.getAttribute('aria-label') === label) ?? buttons.find(button => button.textContent === label)
   if (!button)
     throw new Error(`找不到按钮 ${label}`)
   return button
@@ -181,6 +179,121 @@ async function registry(value: RegistryPayload | undefined): Promise<void> {
 }
 
 describe('侧栏交互', () => {
+  it('分组原位草稿取消不创建记录，保存与分配只改变展示标记', async () => {
+    const { workspaces, mode, item } = await mount()
+    await click('分组视图')
+    await click('新建分组')
+    await input('分组名称', '迭代计划')
+    expect(mode.getSnapshot().blocked).toBe(true)
+    expect(button('工作区视图').disabled).toBe(true)
+    await click('取消编辑分组')
+    expect(createLayoutStore().getSnapshot().groups).toEqual([])
+    await click('新建分组')
+    await input('分组名称', '迭代计划')
+    await act(async () => document.querySelector<HTMLInputElement>('input[aria-label="蓝色"]')!.click())
+    await click('保存分组')
+    const group = createLayoutStore().getSnapshot().groups[0]!
+    expect(group).toMatchObject({ title: '迭代计划', color: 'blue' })
+    await click('设置展示分组')
+    await act(async () => {
+      const select = document.querySelector('select')!
+      select.value = group.id
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await click('保存')
+    expect(document.querySelector(`[data-display-group="${group.id}"] [data-session-id="s"]`)).not.toBeNull()
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+    expect(item.sessionIds).toEqual(['s'])
+    await click('移除分组')
+    expect(document.querySelector('dialog')?.textContent).toContain('不会删除会话')
+    await click('移除分组')
+    expect(document.querySelector('[data-display-group=""] [data-session-id="s"]')).not.toBeNull()
+    expect(workspaces.delete).not.toHaveBeenCalled()
+  })
+
+  it('展示分组改名检查跨页冲突，分组删除后仍可取消原草稿', async () => {
+    const store = createLayoutStore()
+    const group = { id: 'g', title: '计划', color: 'gray' as const, collapsed: false }
+    store.saveGroup(group, true)
+    store.setView('groups')
+    const { mode } = await mount()
+    await click('编辑分组')
+    await input('分组名称', '本页草稿')
+    await act(async () => {
+      store.saveGroup({ ...group, title: '其他页面' })
+      window.dispatchEvent(new StorageEvent('storage', { key: 'dsh-space.sidebar.layout' }))
+    })
+    await click('保存分组')
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('其他页面变更')
+    await act(async () => {
+      store.deleteGroup('g')
+      store.setView('workspaces')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'dsh-space.sidebar.layout' }))
+    })
+    expect(document.querySelector<HTMLInputElement>('[aria-label="分组名称"]')?.value).toBe('本页草稿')
+    await click('取消编辑分组')
+    expect(mode.getSnapshot().blocked).toBe(false)
+    expect(button('工作区视图').getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('宿主收起侧栏时保留分组名称及颜色草稿', async () => {
+    const { setWide } = await mount()
+    await click('分组视图')
+    await click('新建分组')
+    await input('分组名称', '未保存的名称')
+    await setWide(false)
+    expect(document.querySelector<HTMLInputElement>('[aria-label="分组名称"]')?.value).toBe('未保存的名称')
+    await click('保存分组')
+    expect(createLayoutStore().getSnapshot().groups[0]?.title).toBe('未保存的名称')
+    expect(document.querySelector('dialog')).toBeNull()
+  })
+
+  it('收起全部只折叠工作区，独立对话和独立置顶不受影响', async () => {
+    const { workspaces, sessions, item } = await mount()
+    const chat: RegistryItem = { kind: 'chat', workspaceId: 'c', path: '/c', title: '聊天', sessionIds: ['chat'] }
+    const old = sessions.list.getSnapshot()
+    const nextSessions = { ...old, ids: [...old.ids, 'chat'], byId: { ...old.byId, chat: { ...old.byId.s!, id: 'chat', displayTitle: '独立会话' } } }
+    sessions.list.getSnapshot = () => nextSessions
+    const previous = workspaces.list.getSnapshot()
+    const nextWorkspaces = { ...previous, items: [item, chat] }
+    workspaces.list.getSnapshot = () => nextWorkspaces
+    await registry({ ...fixture.registry!, items: [item, chat] })
+    await click('置顶 已有会话')
+    await click('收起全部工作区')
+    expect(document.querySelector('.dsh-space-heading')?.getAttribute('aria-expanded')).toBe('false')
+    expect(document.querySelector('[data-section="chats"] [data-session-id="chat"]')).not.toBeNull()
+    expect(document.querySelector('[data-section="pinned"] [data-session-id="s"]')).not.toBeNull()
+    await click('展开全部工作区')
+    expect(document.querySelector('.dsh-space-heading')?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('活动排序不允许拖动核心工作区或调用会话手动排序', async () => {
+    const { workspaces } = await mount()
+    await click('最近活动')
+    expect(document.querySelector<HTMLButtonElement>('.dsh-space-heading')?.draggable).toBe(false)
+    expect(document.querySelector('.dsh-space-session [role="menu"]')?.textContent).not.toContain('上移')
+    await click('手动排序')
+    expect(document.querySelector<HTMLButtonElement>('.dsh-space-heading')?.draggable).toBe(true)
+    expect(workspaces.insertBefore).not.toHaveBeenCalled()
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+  })
+
+  it('分组支持拖入会话，拖入未分组区域只清理标记', async () => {
+    const store = createLayoutStore()
+    store.saveGroup({ id: 'g', title: '计划', color: 'gray', collapsed: false }, true)
+    store.setView('groups')
+    const { workspaces } = await mount()
+    const move = async (target: string): Promise<void> => act(async () => {
+      document.querySelector('.dsh-space-session-main')!.dispatchEvent(new Event('dragstart', { bubbles: true }))
+      document.querySelector(target)!.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }))
+    })
+    await move('[data-display-group="g"]')
+    expect(createLayoutStore().getSnapshot().assignments.s).toBe('g')
+    await move('[data-display-group=""]')
+    expect(createLayoutStore().getSnapshot().assignments.s).toBeUndefined()
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+  })
+
   it('工作区悬停延迟打开浮层，指针移入浮层后不会被离开计时器关闭', async () => {
     vi.useFakeTimers()
     await mount()

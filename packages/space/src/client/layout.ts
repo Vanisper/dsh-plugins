@@ -35,7 +35,8 @@ export interface LayoutStore {
   movePin: (pin: Pin, before?: Pin) => void
   setView: (view: SidebarView) => void
   setSort: (sort: Partial<Pick<SidebarLayout, 'workspaceSort' | 'sessionSort'>>) => void
-  saveGroup: (group: DisplayGroup, create?: boolean) => void
+  saveGroup: (group: DisplayGroup, create?: boolean, expected?: DisplayGroup) => void
+  setGroupCollapsed: (id: string, collapsed: boolean) => void
   deleteGroup: (id: string) => void
   assignGroup: (sessionId: string, groupId?: string) => void
   moveGroup: (id: string, before?: string) => void
@@ -164,13 +165,16 @@ export function createLayoutStore(): LayoutStore {
     },
     setView: view => change(value => ({ ...value, view })),
     setSort: sort => change(value => ({ ...value, ...sort })),
-    saveGroup(group, create = false): void {
+    saveGroup(group, create = false, expected): void {
       change((value) => {
         const exists = value.groups.some(item => item.id === group.id)
         if (!create && !exists)
           throw new Error('分组已被移除，请关闭后重新检查')
         if (create && exists)
           throw new Error('分组已存在')
+        const current = value.groups.find(item => item.id === group.id)
+        if (expected && current && (current.title !== expected.title || current.color !== expected.color))
+          throw new Error('分组已在其他页面变更，请取消后重新编辑')
         const title = group.title.trim()
         if (!title || title.length > 80)
           throw new Error('分组名称需为 1 至 80 个字符')
@@ -178,10 +182,11 @@ export function createLayoutStore(): LayoutStore {
           throw new Error('请选择有效的分组颜色')
         if (value.groups.some(item => item.id !== group.id && item.title === title))
           throw new Error('已有同名分组')
-        const next = { ...group, title }
+        const next = { ...group, title, collapsed: current?.collapsed ?? group.collapsed }
         return { ...value, groups: exists ? value.groups.map(item => item.id === group.id ? next : item) : [...value.groups, next] }
       })
     },
+    setGroupCollapsed: (id, collapsed) => change(value => ({ ...value, groups: value.groups.map(group => group.id === id ? { ...group, collapsed } : group) })),
     deleteGroup(id): void {
       change(value => ({ ...value, groups: value.groups.filter(group => group.id !== id), assignments: Object.fromEntries(Object.entries(value.assignments).filter(([, groupId]) => groupId !== id)) }))
     },

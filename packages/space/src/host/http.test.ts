@@ -56,4 +56,11 @@ describe('parseOperation', () => {
     expect(parseOperation({ op: 'update-member', workspace: 'w', target: 'm', title: 'Title', description: 'Note' })).toEqual({ op: 'update-member', workspace: 'w', target: 'm', title: 'Title', description: 'Note' })
     expect(() => parseOperation({ op: 'rename-workspace', workspace: 'w' })).toThrow('未知操作')
   })
+
+  it('批量成员边界拒绝无效字段和缺失并发凭据', () => {
+    expect(() => parseOperation({ op: 'save-members', workspace: 'w', members: [] })).toThrow('expectedRevision')
+    expect(() => parseOperation({ op: 'create-space', name: 'demo', members: [{ path: '/a', extra: 1 }] })).toThrow('未知字段')
+    expect(() => parseOperation({ op: 'create-space', name: 'demo', members: 'a' })).toThrow('members')
+    expect(parseOperation({ op: 'create-space', name: 'demo', members: [{ path: '/a' }], primary: '/a' })).toMatchObject({ members: [{ path: '/a' }], primary: '/a' })
+  })
 })

@@ -36,6 +36,7 @@ export interface WorkspaceView {
 
 /** 核心行存在时的多项目投影 */
 export interface SpaceView extends SpaceData, Pick<WorkspaceView, 'path' | 'title' | 'sessionIds'> {
+  revision: string
   path: string
   title: string
   status: 'ready'

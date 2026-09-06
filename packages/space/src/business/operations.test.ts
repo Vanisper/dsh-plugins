@@ -1,7 +1,7 @@
 import type { SpaceStore } from '../store/settings.ts'
 import type { WorkspaceService } from '../workspace/core.ts'
 import type { SpaceSettings, WorkspaceView } from './types.ts'
-import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { canonicalize } from '../shared/fs-path.ts'
 import { chatsDir, localDateName, spacesDir } from '../shared/paths.ts'
 import { savePendingCreation, startPendingCreation } from '../store/pending.ts'
+import { spaceRevision } from './member-draft.ts'
 import { createSpaceOperations } from './operations.ts'
 
 const roots: string[] = []
@@ -261,6 +262,64 @@ describe('operation queue', () => {
 })
 
 describe('update member', () => {
+  it('多成员创建只写入一次，并以选定成员为主成员', async () => {
+    const root = await temporaryRoot()
+    const paths = [join(root, 'a'), join(root, 'b')]
+    for (const path of paths)
+      await mkdir(path)
+    const store = fakeStore(root)
+    const workspaces = fakeWorkspaces()
+    await createSpaceOperations(store, workspaces).execute({ op: 'create-space', name: 'demo', members: paths.map(path => ({ path })), primary: paths[1] })
+    expect(store.value.spaces[0]?.members).toHaveLength(2)
+    expect(store.value.spaces[0]?.primary).toBe(await canonicalize(paths[1]!))
+    expect(workspaces.rows).toHaveLength(1)
+  })
+
+  it('真实路径重复时在创建目录前拒绝整个草稿', async () => {
+    const root = await temporaryRoot()
+    const path = join(root, 'source')
+    const alias = join(root, 'alias')
+    await mkdir(path)
+    await symlink(path, alias)
+    const workspaces = fakeWorkspaces()
+    await expect(createSpaceOperations(fakeStore(root), workspaces).execute({ op: 'create-space', name: 'demo', members: [{ path }, { path: alias }] })).rejects.toThrow('重复成员路径')
+    expect(workspaces.rows).toHaveLength(0)
+    expect(await exists(spacesDir(root))).toBe(false)
+  })
+
+  it('拒绝过期草稿，不覆盖外部成员更改', async () => {
+    const root = await temporaryRoot()
+    const store = fakeStore(root)
+    const operations = createSpaceOperations(store, fakeWorkspaces())
+    await operations.execute({ op: 'create-space', name: 'demo' })
+    const space = store.value.spaces[0]!
+    const revision = spaceRevision(space)
+    const path = await canonicalize(root) as string
+    await operations.execute({ op: 'attach', workspace: space.workspaceId, target: path })
+    await expect(operations.execute({ op: 'save-members', workspace: space.workspaceId, members: [], expectedRevision: revision })).rejects.toThrow('其他位置修改')
+    expect(store.value.spaces[0]?.members).toHaveLength(1)
+  })
+
+  it('批量保存失败时保留原描述和原链接，清理本次新增链接', async () => {
+    const root = await temporaryRoot()
+    const store = fakeStore(root)
+    const workspaces = fakeWorkspaces()
+    const operations = createSpaceOperations(store, workspaces)
+    await mkdir(join(root, 'a'))
+    await mkdir(join(root, 'b'))
+    await operations.execute({ op: 'create-space', name: 'demo', members: [{ path: join(root, 'a'), mode: 'link' }] })
+    const old = structuredClone(store.value.spaces[0]!)
+    store.failNextReplace = true
+    const operation = { op: 'save-members' as const, workspace: old.workspaceId, members: [{ path: join(root, 'b'), mode: 'link' as const }], expectedRevision: spaceRevision(old) }
+    await expect(operations.execute(operation)).rejects.toThrow('settings write failed')
+    expect(store.value.spaces[0]).toEqual(old)
+    expect(await exists(join(workspaces.rows[0]!.path, 'projects/a'))).toBe(true)
+    expect(await exists(join(workspaces.rows[0]!.path, 'projects/b'))).toBe(false)
+    await operations.execute(operation)
+    expect(await exists(join(workspaces.rows[0]!.path, 'projects/a'))).toBe(false)
+    expect(await exists(join(workspaces.rows[0]!.path, 'projects/b'))).toBe(true)
+  })
+
   it('updates title and description with one settings write', async () => {
     const root = await temporaryRoot()
     const memberPath = join(root, 'member')

@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { MemberInput } from '../business/member-draft.ts'
 import type { SpaceOperation, SpaceOperations } from '../business/operations.ts'
 import { Buffer } from 'node:buffer'
 
@@ -14,7 +15,21 @@ interface WebServerLike {
 }
 
 const MAX_BODY = 256 * 1024
-const operationKeys = new Set(['op', 'name', 'folder', 'mode', 'linkName', 'title', 'description', 'workspace', 'target', 'value'])
+const operationKeys = new Set(['op', 'name', 'folder', 'mode', 'linkName', 'title', 'description', 'workspace', 'target', 'value', 'members', 'primary', 'expectedRevision'])
+const memberKeys = new Set(['path', 'mode', 'linkName', 'title', 'description'])
+
+function parseMembers(value: unknown): MemberInput[] {
+  if (!Array.isArray(value) || value.length > 100)
+    throw new Error('members 必须是最多 100 项的数组')
+  return value.map((input) => {
+    const member = object(input)
+    for (const key of Object.keys(member)) {
+      if (!memberKeys.has(key))
+        throw new Error(`成员包含未知字段：${key}`)
+    }
+    return { path: requiredString(member, 'path'), mode: mode(member.mode), linkName: optionalString(member.linkName, 'linkName'), title: optionalString(member.title, 'title'), description: optionalString(member.description, 'description') }
+  })
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -53,7 +68,8 @@ export function parseOperation(value: unknown): SpaceOperation {
   }
   const op = requiredString(body, 'op')
   switch (op) {
-    case 'create-space': return { op, name: requiredString(body, 'name'), folder: optionalString(body.folder, 'folder'), mode: mode(body.mode), linkName: optionalString(body.linkName, 'linkName'), title: optionalString(body.title, 'title'), description: optionalString(body.description, 'description') }
+    case 'create-space': return { op, name: requiredString(body, 'name'), folder: optionalString(body.folder, 'folder'), mode: mode(body.mode), linkName: optionalString(body.linkName, 'linkName'), title: optionalString(body.title, 'title'), description: optionalString(body.description, 'description'), ...(body.members !== undefined ? { members: parseMembers(body.members) } : {}), ...(body.primary !== undefined ? { primary: optionalString(body.primary, 'primary') } : {}) }
+    case 'save-members': return { op, workspace: requiredString(body, 'workspace'), members: parseMembers(body.members), primary: optionalString(body.primary, 'primary'), expectedRevision: requiredString(body, 'expectedRevision') }
     case 'enhance-space': return { op, workspace: requiredString(body, 'workspace') }
     case 'attach': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), mode: mode(body.mode), linkName: optionalString(body.linkName, 'linkName'), title: optionalString(body.title, 'title'), description: optionalString(body.description, 'description') }
     case 'detach': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target') }

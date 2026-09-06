@@ -1,6 +1,7 @@
 import type { Logger } from '../shared/log.ts'
 import type { SpaceStore } from '../store/settings.ts'
 import type { WorkspaceService } from '../workspace/core.ts'
+import type { MemberInput } from './member-draft.ts'
 import type { ChatData, ChatView, RegistrySnapshot, SpaceData, SpaceSettings, SpaceView, WorkspaceView } from './types.ts'
 import { readdir, rmdir } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -9,10 +10,12 @@ import { assertDirectoryName, chatsDir, ensureDirectory, localDateName, slugify,
 import { finishPendingCreation, readPendingCreation, savePendingCreation, startPendingCreation } from '../store/pending.ts'
 import { chatTitle } from './chat.ts'
 import { descriptionsOf, projectDescriptions } from './lookup.ts'
+import { prepareMemberDraft, spaceRevision } from './member-draft.ts'
 import { addMemberData, ensureMemberLink, existingDirectory, findMember, memberData, removeMemberData, removeMemberLink, updateMember } from './member.ts'
 
 export type SpaceOperation
-  = { op: 'create-space', name: string, folder?: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string }
+  = { op: 'create-space', name: string, folder?: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string, members?: MemberInput[], primary?: string }
+    | { op: 'save-members', workspace: string, members: MemberInput[], primary?: string, expectedRevision: string }
     | { op: 'enhance-space', workspace: string }
     | { op: 'attach', workspace: string, target: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string }
     | { op: 'detach', workspace: string, target: string }
@@ -135,6 +138,7 @@ class SpaceOperationsImpl implements SpaceOperations {
     const current = this.store.read()
     switch (operation.op) {
       case 'create-space': return this.createSpace(current, operation)
+      case 'save-members': return this.saveMembers(current, operation)
       case 'enhance-space': return this.enhanceSpace(current, operation.workspace)
       case 'attach': return this.attach(current, operation)
       case 'detach': return this.detach(current, operation)
@@ -150,14 +154,16 @@ class SpaceOperationsImpl implements SpaceOperations {
 
   private async createSpace(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'create-space' }>): Promise<Record<string, unknown>> {
     const name = assertDirectoryName(operation.name)
-    let memberInput: SpaceData['members'][number] | undefined
+    let inputs = operation.members ?? []
+    if (operation.members && (operation.folder !== undefined || operation.mode !== undefined || operation.linkName !== undefined || operation.title !== undefined || operation.description !== undefined))
+      throw new Error('members 不能与单成员选项同时提交')
     if (operation.folder) {
-      const memberPath = await existingDirectory(operation.folder)
-      memberInput = memberData({ ...operation, path: memberPath }, memberPath)
+      inputs = [{ ...operation, path: operation.folder }]
     }
     else if (operation.mode !== undefined || operation.linkName !== undefined || operation.title !== undefined || operation.description !== undefined) {
       throw new Error('成员选项必须与 folder 一起提交')
     }
+    const draft = await prepareMemberDraft(inputs, operation.primary)
     const target = join(spacesDir(this.store.root()), name)
     let pending = await readPendingCreation(target, 'space')
     if (pending)
@@ -199,23 +205,47 @@ class SpaceOperationsImpl implements SpaceOperations {
     }
     pending = { ...pending, path: core.path, workspaceId: core.workspaceId }
     await savePendingCreation(target, pending)
-    let member: SpaceData['members'][number] | undefined
-    let createdLink = false
+    const createdLinks: SpaceData['members'] = []
     try {
-      if (memberInput) {
-        member = memberInput
-        createdLink = await ensureMemberLink(core.path, member)
+      for (const member of draft.members) {
+        if (await ensureMemberLink(core.path, member))
+          createdLinks.push(member)
       }
-      const space: SpaceData = { workspaceId: core.workspaceId, ...(member ? { primary: member.path } : {}), members: member ? [member] : [] }
+      const space: SpaceData = { workspaceId: core.workspaceId, ...draft }
       await this.save({ ...clone(current), spaces: [...current.spaces, space] })
       await finishPendingCreation(target).catch(error => this.log(`[dsh-space] 清理已完成创建凭据失败：${(error as Error).message}`))
       return { space: this.spaceView(core, space) }
     }
     catch (error) {
-      if (createdLink && member)
+      for (const member of createdLinks)
         await removeMemberLink(core.path, member).catch(cleanupError => this.log(`[dsh-space] 清理未登记成员链接失败：${(cleanupError as Error).message}`))
       throw error
     }
+  }
+
+  private async saveMembers(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'save-members' }>): Promise<Record<string, unknown>> {
+    const space = this.requireSpace(current, operation.workspace)
+    if (spaceRevision(space) !== operation.expectedRevision)
+      throw new Error('成员已在其他位置修改，请重新载入后编辑；当前草稿尚未保存')
+    const core = this.requireCore(space.workspaceId)
+    const draft = await prepareMemberDraft(operation.members, operation.primary, space.members)
+    const createdLinks: SpaceData['members'] = []
+    const next = { workspaceId: space.workspaceId, ...draft }
+    try {
+      for (const member of draft.members) {
+        if (!space.members.some(old => old.path === member.path) && await ensureMemberLink(core.path, member))
+          createdLinks.push(member)
+      }
+      await this.save({ ...clone(current), spaces: replaceSpace(current.spaces, next) })
+    }
+    catch (error) {
+      for (const member of createdLinks)
+        await removeMemberLink(core.path, member).catch(cleanupError => this.log(`[dsh-space] 清理未登记成员链接失败：${(cleanupError as Error).message}`))
+      throw error
+    }
+    for (const member of space.members.filter(old => !draft.members.some(member => member.path === old.path)))
+      await removeMemberLink(core.path, member).catch(error => this.log(`[dsh-space] 清理成员链接失败：${(error as Error).message}`))
+    return { space: this.spaceView(core, next) }
   }
 
   private async enhanceSpace(current: SpaceSettings, reference: string): Promise<Record<string, unknown>> {
@@ -370,7 +400,7 @@ class SpaceOperationsImpl implements SpaceOperations {
   }
 
   private spaceView(core: WorkspaceView, space: SpaceData): SpaceView {
-    return { ...core, ...space, status: 'ready' }
+    return { ...core, ...space, revision: spaceRevision(space), status: 'ready' }
   }
 
   private chatView(core: WorkspaceView, chat: ChatData): ChatView {

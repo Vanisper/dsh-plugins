@@ -471,15 +471,101 @@ describe('侧栏交互', () => {
     await click('置顶 已有会话')
     vi.mocked(workspaces.archiveSession).mockRejectedValueOnce(new Error('离线'))
     await click('归档 已有会话')
+    expect(workspaces.archiveSession).not.toHaveBeenCalled()
+    await click('确认归档 已有会话')
     expect(document.querySelector('[data-section="pinned"] [data-session-id="s"]')).not.toBeNull()
     expect(document.querySelector('[role="alert"]')?.textContent).toBe('离线')
     vi.mocked(workspaces.archiveSession).mockImplementationOnce(async () => {
       workspaceSnapshot.archivedSessionIds.push('s')
     })
-    await click('归档 已有会话')
+    await click('确认归档 已有会话')
     await registry({ ...fixture.registry! })
     expect(document.querySelector('[data-session-id="s"]')).toBeNull()
     expect(JSON.parse(localStorage.getItem('dsh-space.sidebar.layout')!).pins).toEqual([])
+  })
+
+  it('归档需要第二次确认，Escape、点击外部和切换视图都取消确认', async () => {
+    const { workspaces } = await mount()
+    await click('归档 已有会话')
+    expect(document.activeElement).toBe(button('确认归档 已有会话'))
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(document.querySelector('.confirming')).toBeNull()
+    await click('归档 已有会话')
+    await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })))
+    expect(document.querySelector('.confirming')).toBeNull()
+    await click('归档 已有会话')
+    await click('分组视图')
+    expect(document.querySelector('.confirming')).toBeNull()
+    expect(workspaces.archiveSession).not.toHaveBeenCalled()
+  })
+
+  it('会话菜单同样经过原地确认，提交中不会重复归档', async () => {
+    const { workspaces, mode } = await mount()
+    let finish!: () => void
+    vi.mocked(workspaces.archiveSession).mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+    await click('归档会话')
+    expect(workspaces.archiveSession).not.toHaveBeenCalled()
+    await click('确认归档 已有会话')
+    await click('确认归档 已有会话')
+    expect(workspaces.archiveSession).toHaveBeenCalledTimes(1)
+    expect(mode.getSnapshot().blocked).toBe(true)
+    expect(button('查看已归档').disabled).toBe(true)
+    await act(async () => finish())
+    expect(mode.getSnapshot().blocked).toBe(false)
+  })
+
+  it('归档视图保留分组标记，禁用计划操作且不调用任何会话写接口', async () => {
+    const store = createLayoutStore()
+    store.saveGroup({ id: 'g', title: '计划', color: 'blue', collapsed: false }, true)
+    store.assignGroup('s', 'g')
+    const { workspaceSnapshot, workspaces, sessions } = await mount()
+    workspaceSnapshot.archivedSessionIds.push('s')
+    await registry({ ...fixture.registry! })
+    await click('查看已归档')
+    expect(document.querySelector('[data-archived-session-id="s"]')?.textContent).toContain('演示空间')
+    expect(document.querySelector('.dsh-space-planned-notice')?.textContent).toContain('计划支持')
+    expect(button('取消归档（计划支持）').disabled).toBe(true)
+    expect(button('永久删除（计划支持）').disabled).toBe(true)
+    await click('取消归档（计划支持）')
+    await click('永久删除（计划支持）')
+    expect(workspaces.archiveSession).not.toHaveBeenCalled()
+    expect(workspaces.delete).not.toHaveBeenCalled()
+    expect(sessions.open).not.toHaveBeenCalled()
+    expect(operation).not.toHaveBeenCalled()
+    expect(createLayoutStore().getSnapshot().assignments.s).toBe('g')
+    await input('搜索归档会话', '不匹配')
+    expect(document.querySelector('.dsh-space-archive')?.textContent).toContain('没有匹配')
+  })
+
+  it('关闭归档恢复原视图、搜索和滚动位置，归档排序不修改原排序', async () => {
+    await mount()
+    await click('分组视图')
+    await input('搜索会话或工作区', '已有')
+    const list = document.querySelector<HTMLDivElement>('.dsh-space-list')!
+    await act(async () => {
+      list.scrollTop = 120
+      list.dispatchEvent(new Event('scroll'))
+    })
+    await click('查看已归档')
+    await input('搜索归档会话', '归档查询')
+    await click('按标题')
+    await click('关闭归档')
+    expect(button('分组视图').getAttribute('aria-checked')).toBe('true')
+    expect(document.querySelector<HTMLInputElement>('[aria-label="搜索会话或工作区"]')?.value).toBe('已有')
+    expect(list.scrollTop).toBe(120)
+    expect(createLayoutStore().getSnapshot().sessionSort).toBe('updated')
+  })
+
+  it('收起侧栏时归档入口仍可使用，摘要缺失明确提示且不清理记录', async () => {
+    const { workspaceSnapshot } = await mount(false)
+    workspaceSnapshot.archivedSessionIds.push('missing')
+    await click('查看已归档')
+    expect(document.querySelector('dialog')?.textContent).toContain('1 条归档记录暂缺会话摘要')
+    expect(workspaceSnapshot.archivedSessionIds).toEqual(['missing'])
+    await click('关闭')
+    expect(document.querySelector('dialog')).toBeNull()
   })
 
   it('长列表折叠时保留当前会话，展开和收起不改核心顺序', async () => {

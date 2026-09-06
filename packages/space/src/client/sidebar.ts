@@ -13,6 +13,7 @@ import type {
   WorkspaceService,
 } from './types.ts'
 import { fetchRegistry, runOperation } from './api.ts'
+import { createArchiveView } from './archive-view.ts'
 import { createControls } from './controls.ts'
 import { createDetails } from './details.ts'
 import { createGroupEditor } from './group-editor.ts'
@@ -26,7 +27,7 @@ import {
   sessionMoveAnchor,
 } from './model.ts'
 import { observeRegistry } from './registry.ts'
-import { projectGroups, sortWorkspaces } from './views.ts'
+import { archivedEntries, projectGroups, sortWorkspaces } from './views.ts'
 import { waitFor } from './wait.ts'
 
 type Dialog
@@ -101,6 +102,7 @@ export function createSidebar(
   const MemberEditor = createMemberEditor(React)
   const Details = createDetails(React)
   const GroupEditor = createGroupEditor(React)
+  const ArchiveView = createArchiveView(React)
   const layoutStore = createLayoutStore()
   const subscribeSessions = (fn: () => void): (() => void) =>
     sessions.list.subscribe(fn)
@@ -137,9 +139,15 @@ export function createSidebar(
     const descriptionRemoved = React.useRef<string | undefined>(undefined)
     const [error, setError] = React.useState<string | undefined>(undefined)
     const [notice, setNotice] = React.useState('')
+    const [archiveOpen, setArchiveOpen] = React.useState(false)
+    const [archiveQuery, setArchiveQuery] = React.useState('')
+    const [archiveSort, setArchiveSort] = React.useState<'updated' | 'title'>('updated')
+    const [archiveConfirmation, setArchiveConfirmation] = React.useState<string | null>(null)
+    const [archiveFailure, setArchiveFailure] = React.useState('')
     const [collapsed, setCollapsed] = React.useState(readCollapsed)
     const layout = React.useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot)
     const activeView = groupDraft ? 'groups' : layout.view
+    const surfaceKey = archiveOpen ? 'archive' : activeView
     const [expandedLists, setExpandedLists] = React.useState<string[]>([])
     const [query, setQuery] = React.useState('')
     const [searchRevision, setSearchRevision] = React.useState(0)
@@ -158,6 +166,8 @@ export function createSidebar(
     const dragGroup = React.useRef<string | undefined>(undefined)
     const listRef = React.useRef<HTMLDivElement | null>(null)
     const scrollPositions = React.useRef<Record<string, number>>({})
+    const archiveRows = React.useRef(new Map<string, HTMLElement>())
+    const confirmationControl = React.useRef<HTMLButtonElement | null>(null)
     const sessionState = React.useSyncExternalStore(
       subscribeSessions,
       readSessions,
@@ -208,8 +218,42 @@ export function createSidebar(
     React.useEffect(() => () => clearTimeout(infoTimer.current), [])
     React.useEffect(() => {
       if (listRef.current)
-        listRef.current.scrollTop = scrollPositions.current[activeView] ?? 0
-    }, [activeView])
+        listRef.current.scrollTop = scrollPositions.current[surfaceKey] ?? 0
+    }, [surfaceKey])
+    React.useEffect(() => {
+      if (!archiveConfirmation)
+        return
+      confirmationControl.current?.focus()
+      const cancel = (): void => {
+        if (busyRef.current)
+          return
+        setArchiveConfirmation(null)
+        archiveRows.current.get(archiveConfirmation)?.querySelector<HTMLButtonElement>('.dsh-space-session-main')?.focus()
+      }
+      const key = (event: KeyboardEvent): void => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          cancel()
+        }
+      }
+      const outside = (event: Event): void => {
+        if (!archiveRows.current.get(archiveConfirmation)?.contains(event.target as Node) && !busyRef.current)
+          setArchiveConfirmation(null)
+      }
+      document.addEventListener('keydown', key)
+      document.addEventListener('pointerdown', outside)
+      document.addEventListener('focusin', outside)
+      return () => {
+        document.removeEventListener('keydown', key)
+        document.removeEventListener('pointerdown', outside)
+        document.removeEventListener('focusin', outside)
+      }
+    }, [archiveConfirmation])
+    React.useEffect(() => setArchiveConfirmation(null), [surfaceKey, query, wide, sessionState.current, dialog, groupDraft?.group.id])
+    React.useEffect(() => {
+      if (archiveConfirmation && workspaceState.archivedSessionIds.includes(archiveConfirmation))
+        setArchiveConfirmation(null)
+    }, [workspaceState.archivedSessionIds, archiveConfirmation])
     React.useEffect(() => {
       try {
         localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed))
@@ -240,6 +284,8 @@ export function createSidebar(
       return () => clearTimeout(timer)
     }, [notice])
     React.useEffect(() => {
+      if (archiveOpen)
+        return
       const normalized = query.trim()
       if (!normalized) {
         setRemoteSearch({
@@ -251,12 +297,12 @@ export function createSidebar(
         return
       }
       const controller = new AbortController()
-      setRemoteSearch({
+      setRemoteSearch(previous => ({
         query: normalized,
         loading: true,
-        items: [],
-        hasMore: false,
-      })
+        items: previous.query === normalized ? previous.items : [],
+        hasMore: previous.query === normalized && previous.hasMore,
+      }))
       const timer = setTimeout(() => {
         void sessions
           .search(normalized, controller.signal)
@@ -287,7 +333,7 @@ export function createSidebar(
         clearTimeout(timer)
         controller.abort()
       }
-    }, [query, searchRevision])
+    }, [query, searchRevision, archiveOpen])
 
     const refresh = (): void => setRegistryRevision(value => value + 1)
     const stopInfoTimer = (): void => clearTimeout(infoTimer.current)
@@ -300,7 +346,7 @@ export function createSidebar(
     }
     const showInfo = (target: Pin, edit = false, hover = false): void => {
       stopInfoTimer()
-      if (busyRef.current || infoEditingRef.current || dialog || groupDraft)
+      if (busyRef.current || infoEditingRef.current || dialog || groupDraft || archiveConfirmation)
         return
       const anchor = anchors.current.get(JSON.stringify(target))
       if (!anchor?.isConnected)
@@ -432,11 +478,20 @@ export function createSidebar(
         old.includes(id) ? old.filter(value => value !== id) : [...old, id],
       )
     const changeView = (view: SidebarView): void => {
-      if (busy || dialog)
+      if (busy || dialog || archiveOpen)
         return
       stopInfoTimer()
       setInfo(null)
       layoutStore.setView(view)
+    }
+    const showArchive = (open: boolean): void => {
+      if (busy || dialog)
+        return
+      stopInfoTimer()
+      setInfo(null)
+      setArchiveOpen(open)
+      if (open)
+        expandSidebar?.()
     }
     const updateLayout = (task: () => void): void => {
       try {
@@ -496,10 +551,24 @@ export function createSidebar(
         run: () => layoutStore.movePin(pin, direction < 0 ? pins[index - 1] : pins[index + 2]),
       }))
     }
-    const archive = (session: SessionRow): void => perform(async () => {
-      await workspaces.archiveSession(session.id)
-      layoutStore.setPinned({ kind: 'session', id: session.id }, false)
-      setNotice('会话已归档')
+    const archive = (session: SessionRow): void => {
+      if (busy)
+        return
+      stopInfoTimer()
+      setInfo(null)
+      setArchiveFailure('')
+      setArchiveConfirmation(session.id)
+    }
+    const confirmArchive = (session: SessionRow): void => perform(async () => {
+      try {
+        await workspaces.archiveSession(session.id)
+        layoutStore.setPinned({ kind: 'session', id: session.id }, false)
+        setArchiveConfirmation(null)
+        setNotice('会话已归档')
+      }
+      catch (cause) {
+        setArchiveFailure(message(cause))
+      }
     })
     const workspacePeers = (item: RegistryItem): RegistryItem[] => items.filter(row =>
       (row.kind === 'chat') === (item.kind === 'chat')
@@ -674,8 +743,14 @@ export function createSidebar(
       return e(
         'div',
         {
-          'className': `dsh-space-session${flat ? ' flat' : ''}${sessionState.current === session.id ? ' current' : ''}`,
+          'className': `dsh-space-session${flat ? ' flat' : ''}${sessionState.current === session.id ? ' current' : ''}${archiveConfirmation === session.id ? ' confirming' : ''}`,
           'data-session-id': session.id,
+          'ref': (node: HTMLElement | null) => {
+            if (node)
+              archiveRows.current.set(session.id, node)
+            else
+              archiveRows.current.delete(session.id)
+          },
           'key': session.id,
           'onContextMenu': openContextMenu,
           'onPointerLeave': leaveInfo,
@@ -706,7 +781,10 @@ export function createSidebar(
               dragPin.current = undefined
               dragSession.current = undefined
             },
-            'onClick': () => sessions.open(session.id),
+            'onClick': () => {
+              setArchiveConfirmation(null)
+              sessions.open(session.id)
+            },
           },
           e('span', {
             'className': `dsh-space-status ${status.className}`,
@@ -726,23 +804,37 @@ export function createSidebar(
               )
             : null,
         ),
-        e(IconButton, {
-          icon: isPinned({ kind: 'session', id: session.id }) ? 'unpin' : 'pin',
-          label: `${isPinned({ kind: 'session', id: session.id }) ? '取消置顶' : '置顶'} ${session.displayTitle}`,
-          disabled: busy,
-          onClick: () => pinAction({ kind: 'session', id: session.id }).run(),
-        }),
-        e(IconButton, {
-          icon: 'archive',
-          label: `归档 ${session.displayTitle}`,
-          disabled: busy,
-          onClick: () => archive(session),
-        }),
-        e(Menu, {
-          label: `${session.displayTitle} 会话操作`,
-          disabled: busy,
-          actions: sessionActions(session, item),
-        }),
+        e('span', { className: 'dsh-space-session-actions' }, ...(archiveConfirmation === session.id
+          ? [
+              e('button', {
+                'type': 'button',
+                'ref': confirmationControl,
+                'className': 'dsh-space-archive-confirm',
+                'aria-label': `确认归档 ${session.displayTitle}`,
+                'disabled': busy,
+                'onClick': () => confirmArchive(session),
+              }, operationBusy ? '归档中' : '确认'),
+              e(IconButton, { icon: 'close', label: '取消归档操作', disabled: busy, onClick: () => {
+                setArchiveConfirmation(null)
+                archiveRows.current.get(session.id)?.querySelector<HTMLButtonElement>('.dsh-space-session-main')?.focus()
+              } }),
+            ]
+          : [e(IconButton, {
+              icon: isPinned({ kind: 'session', id: session.id }) ? 'unpin' : 'pin',
+              label: `${isPinned({ kind: 'session', id: session.id }) ? '取消置顶' : '置顶'} ${session.displayTitle}`,
+              disabled: busy,
+              onClick: () => pinAction({ kind: 'session', id: session.id }).run(),
+            }), e(IconButton, {
+              icon: 'archive',
+              label: `归档 ${session.displayTitle}`,
+              disabled: busy,
+              onClick: () => archive(session),
+            }), e(Menu, {
+              label: `${session.displayTitle} 会话操作`,
+              disabled: busy,
+              actions: sessionActions(session, item),
+            })])),
+        archiveConfirmation === session.id && archiveFailure ? e('div', { className: 'dsh-space-archive-error dsh-space-error', role: 'alert' }, archiveFailure) : null,
       )
     }
     const renderLimited = <T>(rows: T[], key: string, label: string, current: (row: T) => boolean, render: (row: T) => unknown): unknown => {
@@ -977,6 +1069,10 @@ export function createSidebar(
             { label: '移除分组', icon: 'remove', run: () => begin({ type: 'delete-group', group }) },
           ] })), !group.collapsed ? renderEntries(entries, `group:${group.id}`, group.title) : null, !group.collapsed && !entries.length ? e('div', { className: 'dsh-space-section-empty' }, '暂无会话') : null)), groupDraft && (!groupDraft.original || !layout.groups.some(group => group.id === groupDraft.original?.id)) ? renderGroupEditor() : null, e('section', { 'className': 'dsh-space-section', 'aria-label': '未分组会话', 'data-display-group': '', ...drop() }, layout.groups.length ? e('div', { className: 'dsh-space-section-head' }, e('span', { className: 'dsh-space-toolbar-title' }, '未分组')) : null, renderEntries(groups.ungrouped, 'groups:ungrouped', '未分组会话'), !groups.ungrouped.length ? e('div', { className: 'dsh-space-section-empty' }, '暂无未分组会话') : null))
     }
+    const archiveSortActions = (): MenuAction[] => [
+      { label: '最近活动', icon: 'clock', checked: archiveSort === 'updated', run: () => setArchiveSort('updated') },
+      { label: '按标题', icon: 'edit', checked: archiveSort === 'title', run: () => setArchiveSort('title') },
+    ]
     const renderToolbar = (): unknown => {
       const workspaceIds = items.filter(item => item.kind !== 'chat').map(item => item.workspaceId)
       const anyOpen = workspaceIds.some(id => !collapsed.includes(id))
@@ -987,7 +1083,7 @@ export function createSidebar(
         'aria-checked': activeView === view,
         'aria-label': view === 'workspaces' ? '工作区视图' : '分组视图',
         'tabIndex': activeView === view ? 0 : -1,
-        'disabled': busy || !!dialog,
+        'disabled': busy || !!dialog || archiveOpen,
         'onClick': () => changeView(view),
         'onKeyDown': (event: KeyboardEvent) => {
           if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
@@ -997,23 +1093,33 @@ export function createSidebar(
             document.querySelector<HTMLButtonElement>(`[aria-label="${next === 'workspaces' ? '工作区视图' : '分组视图'}"]`)?.focus()
           }
         },
-      }, e(Icon, { name: view === 'workspaces' ? 'folder' : 'hash', size: 14 }), view === 'workspaces' ? '工作区' : '分组'))), activeView === 'workspaces'
-        ? e(IconButton, {
-            icon: anyOpen ? 'collapse' : 'expand',
-            label: anyOpen ? '收起全部工作区' : '展开全部工作区',
-            disabled: busy || !workspaceIds.length,
-            onClick: () => setCollapsed(old => anyOpen ? [...new Set([...old, ...workspaceIds])] : old.filter(id => !workspaceIds.includes(id))),
-          })
-        : e(IconButton, { icon: 'hash', label: '新建分组', disabled: busy, onClick: () => editGroup() }), e('span', { className: 'dsh-space-toolbar-spacer' }), e(Menu, { icon: 'filter', label: '排序方式', disabled: busy, actions: activeView === 'workspaces'
-        ? [
-            { label: '手动排序', icon: 'layers', checked: layout.workspaceSort === 'manual', run: () => layoutStore.setSort({ workspaceSort: 'manual' }) },
-            { label: '最近活动', icon: 'clock', checked: layout.workspaceSort === 'updated', run: () => layoutStore.setSort({ workspaceSort: 'updated' }) },
-          ]
-        : [
-            { label: '最近活动', icon: 'clock', checked: layout.sessionSort === 'updated', run: () => layoutStore.setSort({ sessionSort: 'updated' }) },
-            { label: '按标题', icon: 'edit', checked: layout.sessionSort === 'title', run: () => layoutStore.setSort({ sessionSort: 'title' }) },
-          ] }))
+      }, e(Icon, { name: view === 'workspaces' ? 'folder' : 'hash', size: 14 }), view === 'workspaces' ? '工作区' : '分组'))), archiveOpen
+        ? null
+        : activeView === 'workspaces'
+          ? e(IconButton, {
+              icon: anyOpen ? 'collapse' : 'expand',
+              label: anyOpen ? '收起全部工作区' : '展开全部工作区',
+              disabled: busy || !workspaceIds.length,
+              onClick: () => setCollapsed(old => anyOpen ? [...new Set([...old, ...workspaceIds])] : old.filter(id => !workspaceIds.includes(id))),
+            })
+          : e(IconButton, { icon: 'hash', label: '新建分组', disabled: busy, onClick: () => editGroup() }), e('span', { className: 'dsh-space-toolbar-spacer' }), e(Menu, { icon: 'filter', label: '排序方式', disabled: busy, actions: archiveOpen
+        ? archiveSortActions()
+        : activeView === 'workspaces'
+          ? [
+              { label: '手动排序', icon: 'layers', checked: layout.workspaceSort === 'manual', run: () => layoutStore.setSort({ workspaceSort: 'manual' }) },
+              { label: '最近活动', icon: 'clock', checked: layout.workspaceSort === 'updated', run: () => layoutStore.setSort({ workspaceSort: 'updated' }) },
+            ]
+          : [
+              { label: '最近活动', icon: 'clock', checked: layout.sessionSort === 'updated', run: () => layoutStore.setSort({ sessionSort: 'updated' }) },
+              { label: '按标题', icon: 'edit', checked: layout.sessionSort === 'title', run: () => layoutStore.setSort({ sessionSort: 'title' }) },
+            ] }), e(IconButton, { icon: archiveOpen ? 'close' : 'archive', label: archiveOpen ? '关闭归档' : '查看已归档', disabled: busy, onClick: () => showArchive(!archiveOpen) }))
     }
+    const renderArchive = (showHeading = true): unknown => e(ArchiveView, {
+      ...archivedEntries(items, sessionState, workspaceState, archiveQuery, archiveSort),
+      pending: sessionState.phase !== 'ready' || workspaceState.phase !== 'ready',
+      filtered: !!archiveQuery.trim(),
+      showHeading,
+    })
     const renderDialog = (): unknown => {
       if (!dialog)
         return null
@@ -1578,10 +1684,19 @@ export function createSidebar(
         renderDialog(),
         renderInfo(),
         groupDraft ? e(Modal, { title: '编辑展示分组', busy: false, onClose: closeGroupEditor }, renderGroupEditor()) : null,
+        archiveOpen
+          ? e(Modal, { title: '已归档', busy: false, onClose: () => showArchive(false) }, e('div', { className: 'dsh-space-path-field' }, e('input', { 'type': 'search', 'aria-label': '搜索归档会话', 'placeholder': '搜索归档会话', 'value': archiveQuery, 'onChange': (event: { target: HTMLInputElement }) => setArchiveQuery(event.target.value) }), e(Menu, { icon: 'filter', label: '归档排序方式', actions: archiveSortActions() })), renderArchive(false))
+          : null,
         e(IconButton, {
           icon: 'search',
           label: '搜索会话',
           onClick: openSearch,
+        }),
+        e(IconButton, {
+          icon: 'archive',
+          label: '查看已归档',
+          disabled: busy,
+          onClick: () => showArchive(true),
         }),
         e(IconButton, {
           icon: 'layers',
@@ -1618,106 +1733,108 @@ export function createSidebar(
           'ref': searchInput,
           'className': 'dsh-space-search',
           'type': 'search',
-          'value': query,
+          'value': archiveOpen ? archiveQuery : query,
           'disabled': infoEditing || !!groupDraft,
-          'placeholder': '搜索会话或工作区',
-          'aria-label': '搜索会话或工作区',
+          'placeholder': archiveOpen ? '搜索归档会话' : '搜索会话或工作区',
+          'aria-label': archiveOpen ? '搜索归档会话' : '搜索会话或工作区',
           'onChange': (event: { target: HTMLInputElement }) =>
-            setQuery(event.target.value),
+            archiveOpen ? setArchiveQuery(event.target.value) : setQuery(event.target.value),
           'onKeyDown': (event: KeyboardEvent) => {
             if (event.key === 'Escape')
-              setQuery('')
+              archiveOpen ? setArchiveQuery('') : setQuery('')
           },
         }),
       ),
       notices,
       e(
         'div',
-        { className: 'dsh-space-list', ref: listRef, onScroll: () => { scrollPositions.current[activeView] = listRef.current?.scrollTop ?? 0 } },
-        normalizedQuery
-          ? e(
-              'div',
-              { 'aria-busy': remoteSearch.loading },
-              ...search.items.map(row =>
-                e(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'dsh-space-search-row',
-                    key: row.id,
-                    onClick: () => {
-                      setQuery('')
-                      sessions.open(row.id)
-                    },
-                  },
-                  e('strong', null, row.displayTitle),
-                  e('small', null, row.workspaceTitle),
-                  row.snippet
-                    ? e('small', { title: row.snippet }, row.snippet)
-                    : null,
-                ),
-              ),
-              remoteSearch.loading
-                ? e(
-                    'div',
-                    { className: 'dsh-space-empty', role: 'status' },
-                    '搜索中…',
-                  )
-                : null,
-              remoteSearch.error
-                ? e(
-                    'div',
-                    {
-                      className: 'dsh-space-notice dsh-space-error',
-                      role: 'alert',
-                      title: remoteSearch.error,
-                    },
-                    '全文搜索暂不可用，已保留标题匹配。',
-                    e(IconButton, {
-                      icon: 'refresh',
-                      label: '重试搜索',
-                      onClick: () => setSearchRevision(value => value + 1),
-                    }),
-                  )
-                : null,
-              search.hasMore
-                ? e(
-                    'div',
-                    { className: 'dsh-space-empty' },
-                    '结果较多，请缩小范围',
-                  )
-                : null,
-              !remoteSearch.loading && search.items.length === 0
-                ? e('div', { className: 'dsh-space-empty' }, '没有匹配结果')
-                : null,
-            )
-          : activeView === 'groups'
-            ? renderFlatGroups()
-            : e(
+        { className: 'dsh-space-list', ref: listRef, onScroll: () => { scrollPositions.current[surfaceKey] = listRef.current?.scrollTop ?? 0 } },
+        archiveOpen
+          ? renderArchive()
+          : normalizedQuery
+            ? e(
                 'div',
-                null,
-                ...layout.sections.map(renderSection),
-                workspaceState.phase === 'ready' && buckets.misc.some(row => !isPinned({ kind: 'session', id: row.id }))
-                  ? e(
-                      'section',
-                      { className: 'dsh-space-group' },
-                      e(
-                        'div',
-                        { className: 'dsh-space-toolbar-title' },
-                        '未归组',
-                      ),
-                      ...buckets.misc.filter(row => !isPinned({ kind: 'session', id: row.id })).map(row => renderSession(row, undefined, true)),
-                    )
-                  : null,
-                workspaceState.phase === 'pending'
-                || sessionState.phase === 'pending'
+                { 'aria-busy': remoteSearch.loading },
+                ...search.items.map(row =>
+                  e(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsh-space-search-row',
+                      key: row.id,
+                      onClick: () => {
+                        setQuery('')
+                        sessions.open(row.id)
+                      },
+                    },
+                    e('strong', null, row.displayTitle),
+                    e('small', null, row.workspaceTitle),
+                    row.snippet
+                      ? e('small', { title: row.snippet }, row.snippet)
+                      : null,
+                  ),
+                ),
+                remoteSearch.loading
                   ? e(
                       'div',
                       { className: 'dsh-space-empty', role: 'status' },
-                      '加载工作区…',
+                      '搜索中…',
                     )
                   : null,
-              ),
+                remoteSearch.error
+                  ? e(
+                      'div',
+                      {
+                        className: 'dsh-space-notice dsh-space-error',
+                        role: 'alert',
+                        title: remoteSearch.error,
+                      },
+                      '全文搜索暂不可用，已保留标题匹配。',
+                      e(IconButton, {
+                        icon: 'refresh',
+                        label: '重试搜索',
+                        onClick: () => setSearchRevision(value => value + 1),
+                      }),
+                    )
+                  : null,
+                search.hasMore
+                  ? e(
+                      'div',
+                      { className: 'dsh-space-empty' },
+                      '结果较多，请缩小范围',
+                    )
+                  : null,
+                !remoteSearch.loading && search.items.length === 0
+                  ? e('div', { className: 'dsh-space-empty' }, '没有匹配结果')
+                  : null,
+              )
+            : activeView === 'groups'
+              ? renderFlatGroups()
+              : e(
+                  'div',
+                  null,
+                  ...layout.sections.map(renderSection),
+                  workspaceState.phase === 'ready' && buckets.misc.some(row => !isPinned({ kind: 'session', id: row.id }))
+                    ? e(
+                        'section',
+                        { className: 'dsh-space-group' },
+                        e(
+                          'div',
+                          { className: 'dsh-space-toolbar-title' },
+                          '未归组',
+                        ),
+                        ...buckets.misc.filter(row => !isPinned({ kind: 'session', id: row.id })).map(row => renderSession(row, undefined, true)),
+                      )
+                    : null,
+                  workspaceState.phase === 'pending'
+                  || sessionState.phase === 'pending'
+                    ? e(
+                        'div',
+                        { className: 'dsh-space-empty', role: 'status' },
+                        '加载工作区…',
+                      )
+                    : null,
+                ),
       ),
     )
   }

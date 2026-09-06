@@ -62,9 +62,9 @@ describe('groupSessions', () => {
     expect(result.misc.map(row => row.id)).toEqual(['orphan'])
   })
 
-  it('does not present blank sessions as history, including the selected session', () => {
+  it('shows real sessions even when they have no messages', () => {
     const result = groupSessions(projectRegistry(registry, workspaces), sessions, workspaces)
-    expect(result.rows.get('plain')?.map(row => row.id)).toEqual([])
+    expect(result.rows.get('plain')?.map(row => row.id)).toEqual(['blank', 'other-blank'])
   })
 
   it('does not expose a temporary ungrouped row before both baselines are ready', () => {
@@ -88,12 +88,12 @@ describe('searchRows', () => {
     expect(result.items[0]?.snippet).toBe('matched content')
   })
 
-  it('does not restore hidden blank sessions from remote results', () => {
+  it('includes real blank sessions in local and remote search', () => {
     const result = searchRows('blank', projectRegistry(registry, workspaces), sessions, [], {
-      items: [{ sessionId: 'other-blank', snippet: 'hidden' }],
+      items: [{ sessionId: 'other-blank', snippet: 'matched' }],
       hasMore: false,
     }, 20)
-    expect(result.items.map(item => item.id)).toEqual([])
+    expect(result.items.map(item => item.id)).toEqual(['blank', 'other-blank'])
   })
 })
 

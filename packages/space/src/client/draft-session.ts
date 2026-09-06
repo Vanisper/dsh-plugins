@@ -79,7 +79,7 @@ export function createDraftSession(port: DraftSessionPort): DraftSession {
     discard() {
       if (!editable())
         return false
-      publish({ ...empty(), active: state.active })
+      publish({ ...empty(), active: state.active, targetId: state.targetId })
       return true
     },
     async submit(payload, signal) {

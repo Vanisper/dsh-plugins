@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { MemberInput } from '../business/member-draft.ts'
 import type { SpaceOperation, SpaceOperations } from '../business/operations.ts'
 import { Buffer } from 'node:buffer'
+import { readDraftOptions } from './draft-options.ts'
 
 interface Route {
   kind: 'exact' | 'prefix'
@@ -129,6 +130,16 @@ export function registerHttpApi(ctx: Context, operations: SpaceOperations): () =
       return json(res, 405, { ok: false, error: '只支持 GET' })
     json(res, 200, { ok: true, ...operations.snapshot() })
   } })
+  const draftOptions = server.register({ kind: 'exact', path: '/api/dsh-space/draft-options', handler: async (req, res) => {
+    if (req.method !== 'GET')
+      return json(res, 405, { ok: false, error: '只支持 GET' })
+    try {
+      json(res, 200, { ok: true, ...await readDraftOptions(ctx) })
+    }
+    catch {
+      json(res, 503, { ok: false, error: '新会话选项暂不可用，请重试' })
+    }
+  } })
   const ops = server.register({ kind: 'exact', path: '/api/dsh-space/ops', handler: async (req, res) => {
     if (req.method !== 'POST') {
       json(res, 405, { ok: false, error: '只支持 POST' })
@@ -144,6 +155,7 @@ export function registerHttpApi(ctx: Context, operations: SpaceOperations): () =
   } })
   return () => {
     registry()
+    draftOptions()
     ops()
   }
 }

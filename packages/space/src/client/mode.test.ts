@@ -10,14 +10,14 @@ afterEach(() => {
 })
 
 describe('工作区模式生命周期', () => {
-  it('侧栏与准备页分别释放占用，不相互解锁', () => {
+  it('侧栏与会话草稿分别释放占用，不相互解锁', () => {
     const mode = createModeStore()
     mode.setBlocked(true)
-    mode.setBlocked(true, 'preparation')
+    mode.setBlocked(true, 'draft')
     mode.setMode('official')
     mode.setBlocked(false)
     expect(mode.getSnapshot()).toEqual({ mode: 'space', blocked: true })
-    mode.setBlocked(false, 'preparation')
+    mode.setBlocked(false, 'draft')
     expect(mode.getSnapshot()).toEqual({ mode: 'official', blocked: false })
   })
 

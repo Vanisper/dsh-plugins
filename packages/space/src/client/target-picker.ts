@@ -7,6 +7,7 @@ interface TargetPickerProps {
   items?: RegistryItem[]
   selectedId?: string
   independent?: boolean
+  disabled?: boolean
   error?: string
   onPick: (id?: string) => void
   onClose: () => void
@@ -18,12 +19,15 @@ export interface HostWorkspacePickerProps {
   selectedId?: string
   onPick: (id: string) => void
   onClose: () => void
+  independent?: boolean
+  onIndependent?: () => void
+  disabled?: boolean
 }
 
 export function createTargetPicker(React: ReactLike): (props: TargetPickerProps) => unknown {
   const e = React.createElement
   const { Icon, Modal } = createControls(React)
-  return function TargetPicker({ items, selectedId, independent, error, onPick, onClose, onRetry }: TargetPickerProps): unknown {
+  return function TargetPicker({ items, selectedId, independent, disabled, error, onPick, onClose, onRetry }: TargetPickerProps): unknown {
     const [query, setQuery] = React.useState('')
     const needle = query.trim().toLocaleLowerCase()
     const choices = (items ?? []).filter(item => item.kind !== 'chat' && `${item.title}\n${item.path}`.toLocaleLowerCase().includes(needle))
@@ -33,13 +37,13 @@ export function createTargetPicker(React: ReactLike): (props: TargetPickerProps)
       'placeholder': '搜索名称或路径',
       'value': query,
       'onChange': (event: { target: { value: string } }) => setQuery(event.target.value),
-    }), e('div', { className: 'dsh-space-target-list' }, independent ? e('button', { 'type': 'button', 'onClick': () => onPick(), 'aria-pressed': !selectedId }, e(Icon, { name: 'chat' }), e('span', null, '独立对话'), !selectedId ? e(Icon, { name: 'check' }) : null) : null, ...choices.map(item => e('button', { 'type': 'button', 'key': item.workspaceId, 'onClick': () => onPick(item.workspaceId), 'aria-pressed': selectedId === item.workspaceId }, e(Icon, { name: item.kind === 'space' ? 'layers' : 'folder' }), e('span', null, item.title, e('small', null, item.path)), selectedId === item.workspaceId ? e(Icon, { name: 'check' }) : null)), error
+    }), e('div', { className: 'dsh-space-target-list' }, independent ? e('button', { 'type': 'button', 'disabled': disabled, 'onClick': () => onPick(), 'aria-pressed': !selectedId }, e(Icon, { name: 'chat' }), e('span', null, '独立对话'), !selectedId ? e(Icon, { name: 'check' }) : null) : null, ...choices.map(item => e('button', { 'type': 'button', 'key': item.workspaceId, 'disabled': disabled, 'onClick': () => onPick(item.workspaceId), 'aria-pressed': selectedId === item.workspaceId }, e(Icon, { name: item.kind === 'space' ? 'layers' : 'folder' }), e('span', null, item.title, e('small', null, item.path)), selectedId === item.workspaceId ? e(Icon, { name: 'check' }) : null)), error
       ? e('div', { role: 'alert' }, '工作区描述读取失败。', e('button', { type: 'button', className: 'dsh-space-button', onClick: onRetry }, '重试'))
       : choices.length === 0 ? e('p', { role: 'status' }, items ? '没有匹配的工作区' : '正在读取工作区…') : null))
   }
 }
 
-/** 完整输入区沿用宿主的草稿转移，仅替换候选投影，不列出 Chat 目录 */
+/** 共用目标候选投影；草稿态只选择意图，真实会话态由宿主处理切换 */
 export function createHostWorkspacePicker(React: ReactLike, workspaces: WorkspaceService): (props: HostWorkspacePickerProps) => unknown {
   const e = React.createElement
   const Picker = createTargetPicker(React)
@@ -55,9 +59,11 @@ export function createHostWorkspacePicker(React: ReactLike, workspaces: Workspac
     return e(Picker, {
       items: registry && core.phase === 'ready' ? projectRegistry(registry, core) : undefined,
       selectedId: props.selectedId,
+      independent: props.independent,
+      disabled: props.disabled,
       error,
       onClose: props.onClose,
-      onPick: (id: string) => props.onPick(id),
+      onPick: (id?: string) => id === undefined ? props.onIndependent?.() : props.onPick(id),
       onRetry: () => setRevision(value => value + 1),
     })
   }

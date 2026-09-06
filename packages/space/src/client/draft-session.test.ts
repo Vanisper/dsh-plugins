@@ -35,6 +35,15 @@ describe('新会话草稿的实体边界', () => {
     expect(state).toMatchObject({ phase: 'created', active: false })
   })
 
+  it('丢弃释放创建身份但保留当前工作区意图', async () => {
+    const { draft, port } = harness()
+    port.create.mockRejectedValueOnce(new Error('failed'))
+    draft.begin('project')
+    await expect(draft.submit(payload, signal())).rejects.toThrow()
+    expect(draft.discard()).toBe(true)
+    expect(draft.getSnapshot()).toEqual({ active: true, phase: 'editing', targetId: 'project' })
+  })
+
   it('纯附件可以创建会话，空输入不能创建', async () => {
     const { draft, port } = harness()
     draft.begin()

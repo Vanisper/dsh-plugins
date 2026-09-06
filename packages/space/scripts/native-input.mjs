@@ -63,7 +63,7 @@ function visit(node) {
     return f.updateVariableDeclaration(node, node.name, node.exclamationToken, node.type, f.createBinaryExpression(f.createPrefixUnaryExpression(ts.SyntaxKind.ExclamationToken, f.createIdentifier('draftMode')), ts.SyntaxKind.AmpersandAmpersandToken, f.createParenthesizedExpression(node.initializer)))
   }
   if (ts.isPropertyAssignment(node) && node.name.getText(file) === 'selectedId') {
-    return f.updatePropertyAssignment(node, node.name, f.createBinaryExpression(f.createPropertyAccessChain(f.createIdentifier('draftTarget'), f.createToken(ts.SyntaxKind.QuestionDotToken), 'workspaceId'), ts.SyntaxKind.QuestionQuestionToken, node.initializer))
+    return f.updatePropertyAssignment(node, node.name, f.createConditionalExpression(f.createIdentifier('draftMode'), undefined, f.createPropertyAccessChain(f.createIdentifier('draftTarget'), f.createToken(ts.SyntaxKind.QuestionDotToken), 'workspaceId'), undefined, node.initializer))
   }
   return ts.visitEachChild(node, visit, context)
 }

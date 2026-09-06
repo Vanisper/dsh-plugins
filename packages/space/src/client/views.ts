@@ -44,7 +44,7 @@ export function projectGroups(items: RegistryItem[], buckets: SessionBuckets, la
   return { pinned, groups, ungrouped: entries.filter(entry => !ids.has(layout.assignments[entry.session.id]!)) }
 }
 
-/** 归档列表以核心归档集合为准，不借用正常视图的空白会话过滤规则 */
+/** 归档列表以核心归档集合为准，缺失摘要单独报告 */
 export function archivedEntries(items: RegistryItem[], sessions: SessionSnapshot, workspaces: WorkspaceSnapshot, query: string, sort: SidebarLayout['sessionSort']): { entries: SessionEntry[], missing: number } {
   if (sessions.phase !== 'ready' || workspaces.phase !== 'ready')
     return { entries: [], missing: 0 }

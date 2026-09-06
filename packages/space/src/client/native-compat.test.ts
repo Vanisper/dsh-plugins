@@ -1,5 +1,6 @@
+import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
-import { assertNativeCompatibility, createNativeComposer, extendNativeEntry, extendNewSession } from './native-compat.ts'
+import { assertNativeCompatibility, createNativeComposer, extendNativeEntry, extendNewSession, pauseInitialSelection } from './native-compat.ts'
 
 function store<T>(initial: T) {
   let state = initial
@@ -70,12 +71,45 @@ describe('锁定版本的原生输入复用', () => {
 })
 
 describe('可撤销宿主兼容扩展', () => {
+  it('暂停准确的启动订阅，官方模式恢复原策略且卸载不重建宿主', async () => {
+    const ctx = new Context()
+    const off = vi.fn()
+    const workspace = {
+      initialSelectionStarted: false,
+      startInitialSelection: vi.fn(() => {
+        workspace.initialSelectionStarted = true
+        return off
+      }),
+    }
+    const runtime = (ctx: Context): void => {
+      ctx.reflect.provide('workspaces', workspace, undefined)
+      ctx.effect(() => workspace.startInitialSelection(), 'runtime: initial Workspace selection')
+    }
+    const fiber = await ctx.plugin(runtime)
+    const require = (id: string): unknown => id === '@deepseek-ai/cordis' ? { Context } : runtime
+    const undo = pauseInitialSelection(ctx, require, workspace)
+    expect(off).toHaveBeenCalledTimes(1)
+    undo()
+    undo()
+    expect(workspace.startInitialSelection).toHaveBeenCalledTimes(2)
+    const undoAgain = pauseInitialSelection(ctx, require, workspace)
+    await fiber.dispose()
+    expect(undoAgain).not.toThrow()
+    expect(workspace.startInitialSelection).toHaveBeenCalledTimes(2)
+  })
+
+  it('没有对应启动 effect 时拒绝接入，不关闭不相关运行时', () => {
+    const ctx = new Context()
+    expect(() => pauseInitialSelection(ctx, () => ({ Context }), {})).toThrow('启动选择策略')
+  })
+
   it('拒绝未知宿主构建，不根据版本文案猜测兼容性', () => {
     expect(() => assertNativeCompatibility(undefined)).toThrow('仅支持')
     const graph = { entries: [
       { id: '@deepseek-ai/dsh-client-runtime', rev: 'aba836a0c42d' },
       { id: '@deepseek-ai/dsh-client-ui-conversation', rev: 'cf4575517765' },
       { id: '@deepseek-ai/dsh-client-ui-renderer', rev: '79b59d365f3b' },
+      { id: '@deepseek-ai/dsh-client-ui-model-selection', rev: '639da97bfe66' },
     ] }
     expect(() => assertNativeCompatibility(graph)).not.toThrow()
     graph.entries[0]!.rev = 'unknown'

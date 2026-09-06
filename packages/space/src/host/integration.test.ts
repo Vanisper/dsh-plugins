@@ -162,7 +162,7 @@ describe('官方宿主集成', () => {
     expect(h.ctx.workspaceRegistry.list().map(row => row.id)).toEqual(ids)
     const reloaded = await h.ctx.plugin(plugin)
     cleanups.push(() => reloaded.dispose())
-    expect(h.routes.size).toBe(2)
+    expect(h.routes.size).toBe(3)
     expect((await fetch(`${h.url}/registry`).then(response => response.json())).items[0].kind).toBe('space')
   })
 

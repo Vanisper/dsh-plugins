@@ -96,7 +96,7 @@ export function createSidebar(
   sessions: SessionService,
   workspaces: WorkspaceService,
   mode: ModeStore,
-  prepare: (workspaceId?: string) => void,
+  beginDraft: (workspaceId?: string) => void,
 ): (props: SlotProps) => unknown {
   const e = React.createElement
   const { Icon, IconButton, Menu, Modal } = createControls(React)
@@ -436,7 +436,7 @@ export function createSidebar(
           '工作区已创建，正在等待核心列表同步。请重试进入，不会重复创建。',
         )
       }
-      prepare(id)
+      beginDraft(id)
     }
     const createSpace = (): void =>
       perform(
@@ -460,7 +460,7 @@ export function createSidebar(
           setNotice('空间已创建')
         },
       )
-    const createChat = (): void => prepare()
+    const createChat = (): void => beginDraft()
     const toggle = (id: string): void =>
       setCollapsed(old =>
         old.includes(id) ? old.filter(value => value !== id) : [...old, id],
@@ -631,7 +631,7 @@ export function createSidebar(
       {
         label: '新建会话',
         icon: 'chat',
-        run: () => prepare(item.workspaceId),
+        run: () => beginDraft(item.workspaceId),
       },
       {
         label: '打开目录',
@@ -914,7 +914,7 @@ export function createSidebar(
             icon: 'chat',
             label: `在 ${item.title} 中新建会话`,
             disabled: busy,
-            onClick: () => prepare(item.workspaceId),
+            onClick: () => beginDraft(item.workspaceId),
           }),
           e(Menu, {
             label: `${item.title} 工作区操作`,
@@ -1143,7 +1143,7 @@ export function createSidebar(
               disabled: busy,
               onClick: () => {
                 close()
-                prepare(item.workspaceId)
+                beginDraft(item.workspaceId)
               },
             }),
             e(Menu, { label: `${item.title} 工作区操作`, actions: workspaceActions(item), disabled: busy }),
@@ -1204,7 +1204,7 @@ export function createSidebar(
                   const workspace = await workspaces.create({
                     path: text.trim(),
                   })
-                  prepare(workspace.workspaceId)
+                  beginDraft(workspace.workspaceId)
                 },
                 () => setDialog(null),
               ),
@@ -1562,7 +1562,7 @@ export function createSidebar(
                 disabled: busy,
                 onClick: () => {
                   dismiss()
-                  prepare(item!.workspaceId)
+                  beginDraft(item!.workspaceId)
                 },
               }),
         ),

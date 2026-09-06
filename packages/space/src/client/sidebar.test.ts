@@ -123,13 +123,13 @@ async function mount(wide = true) {
     archiveSession: vi.fn(),
   } as unknown as WorkspaceService
   const mode = createModeStore()
-  const prepare = vi.fn()
+  const beginDraft = vi.fn()
   const Sidebar = createSidebar(
     React as unknown as ReactLike,
     sessions,
     workspaces,
     mode,
-    prepare,
+    beginDraft,
   )
   const host = document.createElement('div')
   document.body.append(host)
@@ -145,7 +145,7 @@ async function mount(wide = true) {
   cleanup = async () => {
     await act(async () => root.unmount())
   }
-  return { sessions, workspaces, mode, prepare, item, workspaceSnapshot, sessionSnapshot, setWide }
+  return { sessions, workspaces, mode, beginDraft, item, workspaceSnapshot, sessionSnapshot, setWide }
 }
 
 function button(label: string): HTMLButtonElement {
@@ -181,12 +181,12 @@ async function registry(value: RegistryPayload | undefined): Promise<void> {
 }
 
 describe('侧栏交互', () => {
-  it('独立对话和工作区新会话只打开准备页，不分配目录或会话', async () => {
-    const { prepare, workspaces } = await mount()
+  it('独立对话和工作区新会话只开始草稿，不分配目录或会话', async () => {
+    const { beginDraft, workspaces } = await mount()
     await click('新建独立对话')
-    expect(prepare).toHaveBeenCalledWith()
+    expect(beginDraft).toHaveBeenCalledWith()
     await click('在 演示空间 中新建会话')
-    expect(prepare).toHaveBeenLastCalledWith('w')
+    expect(beginDraft).toHaveBeenLastCalledWith('w')
     expect(operation).not.toHaveBeenCalled()
     expect(workspaces.startSession).not.toHaveBeenCalled()
   })
@@ -728,7 +728,7 @@ describe('侧栏交互', () => {
 
   it('创建成功但列表未同步时锁定已提交草稿，重试只进入原工作区', async () => {
     vi.useFakeTimers()
-    const { workspaces, prepare } = await mount(false)
+    const { workspaces, beginDraft } = await mount(false)
     await click('创建空间')
     await input('空间名称', '新空间')
     operation.mockResolvedValueOnce({ space: { workspaceId: 'new' } })
@@ -745,7 +745,7 @@ describe('侧栏交互', () => {
     workspaces.list.getSnapshot = () => updated
     await click('进入工作区')
     expect(operation).toHaveBeenCalledTimes(1)
-    expect(prepare).toHaveBeenCalledWith('new')
+    expect(beginDraft).toHaveBeenCalledWith('new')
     expect(workspaces.startSession).not.toHaveBeenCalled()
     expect(document.querySelector('dialog')).toBeNull()
   })
@@ -837,12 +837,12 @@ describe('侧栏交互', () => {
     expect(mode.getSnapshot().blocked).toBe(false)
   })
 
-  it('当前空白会话不进入历史列表和会话操作', async () => {
+  it('已创建的空白会话保留真实节点及操作入口', async () => {
     const { sessionSnapshot } = await mount()
     sessionSnapshot.byId.s.blank = true
     await registry({ ...fixture.registry! })
-    expect(document.querySelector('.dsh-space-session-main')).toBeNull()
-    expect(document.body.textContent).not.toContain('分叉会话')
+    expect(document.querySelector('.dsh-space-session-main')).not.toBeNull()
+    expect(document.body.textContent).toContain('分叉会话')
   })
 
   it('全文命中并入核心会话元数据，展示匹配片段', async () => {

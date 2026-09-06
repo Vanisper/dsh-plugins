@@ -62,9 +62,9 @@ describe('groupSessions', () => {
     expect(result.misc.map(row => row.id)).toEqual(['orphan'])
   })
 
-  it('shows only the selected blank session', () => {
+  it('does not present blank sessions as history, including the selected session', () => {
     const result = groupSessions(projectRegistry(registry, workspaces), sessions, workspaces)
-    expect(result.rows.get('plain')?.map(row => row.id)).toEqual(['blank'])
+    expect(result.rows.get('plain')?.map(row => row.id)).toEqual([])
   })
 
   it('does not expose a temporary ungrouped row before both baselines are ready', () => {
@@ -93,7 +93,7 @@ describe('searchRows', () => {
       items: [{ sessionId: 'other-blank', snippet: 'hidden' }],
       hasMore: false,
     }, 20)
-    expect(result.items.map(item => item.id)).toEqual(['blank'])
+    expect(result.items.map(item => item.id)).toEqual([])
   })
 })
 

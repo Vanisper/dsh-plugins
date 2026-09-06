@@ -11,10 +11,11 @@ export async function fetchRegistry(signal?: AbortSignal): Promise<RegistryPaylo
   return await responseJson(await fetch('/api/dsh-space/registry', { signal, cache: 'no-store' })) as unknown as RegistryPayload
 }
 
-export async function runOperation(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function runOperation(body: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
   return await responseJson(await fetch('/api/dsh-space/ops', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   }))
 }

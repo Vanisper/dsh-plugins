@@ -10,6 +10,8 @@
 
 **对话工作区（Chat Workspace）**：由插件创建的、按本地日期和名称组织的核心 Workspace 附加描述。它与 Space 共享核心 Workspace 生命周期，但不包含成员集合。
 
+**对话准备（Conversation Preparation）**：尚未交接给宿主输入区的文本与目标选择，不是 Session 或 Workspace。实体分配发生在发送或显式进入完整输入区时；交接后使用官方会话生命周期。
+
 **组织层（Organization Layer）**：目录和会话的可见关系、命名、分组与提示词投影。组织层可以独立运行，即使宿主暂时不能授予成员目录的写权限。
 
 **权限层（Permission Layer）**：由宿主沙箱或其他执行能力决定的可读写范围。权限层可以在未来消费 Space 的成员集合，但不能反向成为 Space 身份或会话归属的事实源。

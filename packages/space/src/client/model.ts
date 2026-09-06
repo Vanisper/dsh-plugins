@@ -59,7 +59,7 @@ export function groupSessions(items: RegistryItem[], sessions: SessionSnapshot, 
   const misc: SessionView[] = []
   for (const id of sessions.ids) {
     const session = sessions.byId[id]
-    if (!session || session.origin === 'subagent' || archived.has(id) || (session.blank && sessions.current !== id))
+    if (!session || session.origin === 'subagent' || archived.has(id) || session.blank)
       continue
     const row = { ...session, runningSubagentCount: runningChildren.get(id) ?? 0 }
     const owner = owners.get(id)
@@ -104,7 +104,7 @@ export function searchRows(
   for (const id of sessions.ids) {
     const session = sessions.byId[id]
     const workspace = workspaceBySession.get(id)
-    if (!session || session.origin === 'subagent' || archived.has(id) || (session.blank && sessions.current !== id))
+    if (!session || session.origin === 'subagent' || archived.has(id) || session.blank)
       continue
     if (session.displayTitle.toLocaleLowerCase().includes(needle) || workspace?.title.toLocaleLowerCase().includes(needle))
       ids.push(id)
@@ -115,7 +115,7 @@ export function searchRows(
   }
   const result = ids.flatMap((id): SearchRow[] => {
     const session = sessions.byId[id]
-    if (!session || session.origin === 'subagent' || archived.has(id) || (session.blank && sessions.current !== id))
+    if (!session || session.origin === 'subagent' || archived.has(id) || session.blank)
       return []
     return [{
       ...session,

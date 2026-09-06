@@ -25,7 +25,7 @@ it('发布产物可在同一页面重复装载，变量不进入全局作用域'
     for (const [entry] of load.mock.calls) {
       expect(entry.id).toBe('dsh-space')
       const module = entry.factory(() => ({}))
-      expect(module.inject).toEqual(['slots', 'sessions', 'workspaces'])
+      expect(module.inject).toEqual(['slots', 'sessions', 'workspaces', 'conversation'])
       expect(module.apply).toBeTypeOf('function')
     }
   }

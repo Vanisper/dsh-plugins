@@ -96,6 +96,7 @@ export function createSidebar(
   sessions: SessionService,
   workspaces: WorkspaceService,
   mode: ModeStore,
+  prepare: (workspaceId?: string) => void,
 ): (props: SlotProps) => unknown {
   const e = React.createElement
   const { Icon, IconButton, Menu, Modal } = createControls(React)
@@ -135,7 +136,6 @@ export function createSidebar(
     const busy = operationBusy || infoEditing || !!groupDraft
     const busyRef = React.useRef(false)
     const createdId = React.useRef<string | undefined>(undefined)
-    const chatId = React.useRef<string | undefined>(undefined)
     const descriptionRemoved = React.useRef<string | undefined>(undefined)
     const [error, setError] = React.useState<string | undefined>(undefined)
     const [notice, setNotice] = React.useState('')
@@ -436,7 +436,7 @@ export function createSidebar(
           '工作区已创建，正在等待核心列表同步。请重试进入，不会重复创建。',
         )
       }
-      workspaces.startSession(id)
+      prepare(id)
     }
     const createSpace = (): void =>
       perform(
@@ -460,19 +460,7 @@ export function createSidebar(
           setNotice('空间已创建')
         },
       )
-    const createChat = (): void =>
-      perform(async () => {
-        if (!chatId.current) {
-          const result = await runOperation({ op: 'create-chat' })
-          chatId.current = (
-            result.chat as { workspaceId?: string }
-          )?.workspaceId
-          if (!chatId.current)
-            throw new Error('创建结果缺少核心工作区 ID')
-        }
-        await startCreated(chatId.current)
-        chatId.current = undefined
-      })
+    const createChat = (): void => prepare()
     const toggle = (id: string): void =>
       setCollapsed(old =>
         old.includes(id) ? old.filter(value => value !== id) : [...old, id],
@@ -643,7 +631,7 @@ export function createSidebar(
       {
         label: '新建会话',
         icon: 'chat',
-        run: () => workspaces.startSession(item.workspaceId),
+        run: () => prepare(item.workspaceId),
       },
       {
         label: '打开目录',
@@ -926,7 +914,7 @@ export function createSidebar(
             icon: 'chat',
             label: `在 ${item.title} 中新建会话`,
             disabled: busy,
-            onClick: () => workspaces.startSession(item.workspaceId),
+            onClick: () => prepare(item.workspaceId),
           }),
           e(Menu, {
             label: `${item.title} 工作区操作`,
@@ -1155,7 +1143,7 @@ export function createSidebar(
               disabled: busy,
               onClick: () => {
                 close()
-                workspaces.startSession(item.workspaceId)
+                prepare(item.workspaceId)
               },
             }),
             e(Menu, { label: `${item.title} 工作区操作`, actions: workspaceActions(item), disabled: busy }),
@@ -1216,7 +1204,7 @@ export function createSidebar(
                   const workspace = await workspaces.create({
                     path: text.trim(),
                   })
-                  workspaces.startSession(workspace.workspaceId)
+                  prepare(workspace.workspaceId)
                 },
                 () => setDialog(null),
               ),
@@ -1574,7 +1562,7 @@ export function createSidebar(
                 disabled: busy,
                 onClick: () => {
                   dismiss()
-                  workspaces.startSession(item!.workspaceId)
+                  prepare(item!.workspaceId)
                 },
               }),
         ),
@@ -1654,18 +1642,6 @@ export function createSidebar(
             'div',
             { className: 'dsh-space-notice dsh-space-error', role: 'alert' },
             error,
-            chatId.current
-              ? e(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'dsh-space-button',
-                    disabled: busy,
-                    onClick: createChat,
-                  },
-                  '重试进入',
-                )
-              : null,
           )
         : null,
       notice

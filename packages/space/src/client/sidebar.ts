@@ -1,4 +1,5 @@
 import type { MenuAction } from './controls.ts'
+import type { LayoutEntry, Pin, SectionId } from './layout.ts'
 import type { MemberDraft } from './member-editor.ts'
 import type { ModeStore } from './mode.ts'
 import type { SessionView } from './model.ts'
@@ -13,6 +14,7 @@ import type {
 } from './types.ts'
 import { fetchRegistry, runOperation } from './api.ts'
 import { createControls } from './controls.ts'
+import { createLayoutStore, projectLayout, visibleEntries } from './layout.ts'
 import { createMemberEditor, memberLabel } from './member-editor.ts'
 import {
   groupSessions,
@@ -34,6 +36,7 @@ type Dialog
     | { type: 'drop-description', item: RegistryItem }
     | { type: 'edit-space', item: RegistryItem }
     | { type: 'rename-session', session: SessionRow }
+    | { type: 'chat-directories' }
 
 interface RemoteSearch {
   query: string
@@ -85,6 +88,7 @@ export function createSidebar(
   const e = React.createElement
   const { Icon, IconButton, Menu, Modal } = createControls(React)
   const MemberEditor = createMemberEditor(React)
+  const layoutStore = createLayoutStore()
   const subscribeSessions = (fn: () => void): (() => void) =>
     sessions.list.subscribe(fn)
   const readSessions = (): ReturnType<typeof sessions.list.getSnapshot> =>
@@ -113,6 +117,8 @@ export function createSidebar(
     const [error, setError] = React.useState<string | undefined>(undefined)
     const [notice, setNotice] = React.useState('')
     const [collapsed, setCollapsed] = React.useState(readCollapsed)
+    const layout = React.useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot)
+    const [expandedLists, setExpandedLists] = React.useState<string[]>([])
     const [query, setQuery] = React.useState('')
     const [searchRevision, setSearchRevision] = React.useState(0)
     const [remoteSearch, setRemoteSearch] = React.useState<RemoteSearch>({
@@ -124,6 +130,8 @@ export function createSidebar(
     const searchInput = React.useRef<HTMLInputElement | null>(null)
     const focusSearch = React.useRef(false)
     const dragWorkspace = React.useRef<string | undefined>(undefined)
+    const dragSection = React.useRef<SectionId | undefined>(undefined)
+    const dragPin = React.useRef<Pin | undefined>(undefined)
     const sessionState = React.useSyncExternalStore(
       subscribeSessions,
       readSessions,
@@ -140,6 +148,11 @@ export function createSidebar(
       () => groupSessions(items, sessionState, workspaceState),
       [items, sessionState, workspaceState],
     )
+    const sections = React.useMemo(() => projectLayout(items, buckets, layout.pins), [items, buckets, layout.pins])
+    const ownsCurrent = (entry: LayoutEntry): boolean => entry.kind === 'session'
+      ? entry.session.id === sessionState.current
+      : entry.rows.some(row => row.id === sessionState.current)
+    const currentSection = layout.sections.find(id => sections[id].some(ownsCurrent))
 
     React.useEffect(
       () =>
@@ -167,7 +180,9 @@ export function createSidebar(
       )
       if (owner)
         setCollapsed(old => old.filter(id => id !== owner.workspaceId))
-    }, [sessionState.current])
+      if (currentSection)
+        layoutStore.setCollapsed(currentSection, false)
+    }, [sessionState.current, currentSection])
     React.useEffect(() => {
       if (wide && focusSearch.current) {
         searchInput.current?.focus()
@@ -333,14 +348,42 @@ export function createSidebar(
         refresh()
         setNotice(success)
       })
+    const isPinned = (pin: Pin): boolean => layout.pins.some(value => value.kind === pin.kind && value.id === pin.id)
+    const pinAction = (pin: Pin): MenuAction => ({
+      label: isPinned(pin) ? '取消置顶' : '置顶',
+      icon: isPinned(pin) ? 'unpin' : 'pin',
+      run: () => layoutStore.setPinned(pin, !isPinned(pin)),
+    })
+    const entryPin = (entry: LayoutEntry): Pin => entry.kind === 'workspace'
+      ? { kind: 'workspace', id: entry.item.workspaceId }
+      : { kind: 'session', id: entry.session.id }
+    const pinnedMoves = (pin: Pin): MenuAction[] => {
+      const pins = sections.pinned.map(entryPin)
+      const index = pins.findIndex(value => value.kind === pin.kind && value.id === pin.id)
+      return ([-1, 1] as const).map(direction => ({
+        label: direction === -1 ? '上移' : '下移',
+        icon: direction === -1 ? 'up' : 'down',
+        disabled: index < 0 || index + direction < 0 || index + direction >= pins.length,
+        run: () => layoutStore.movePin(pin, direction < 0 ? pins[index - 1] : pins[index + 2]),
+      }))
+    }
+    const archive = (session: SessionRow): void => perform(async () => {
+      await workspaces.archiveSession(session.id)
+      layoutStore.setPinned({ kind: 'session', id: session.id }, false)
+      setNotice('会话已归档')
+    })
+    const workspacePeers = (item: RegistryItem): RegistryItem[] => items.filter(row =>
+      (row.kind === 'chat') === (item.kind === 'chat')
+      && !isPinned({ kind: 'workspace', id: row.workspaceId }),
+    )
     const sessionActions = (
       session: SessionRow,
       item?: RegistryItem,
     ): MenuAction[] => {
-      const core = workspaceState.items.find(
-        row => row.workspaceId === item?.workspaceId,
-      )
+      const pin: Pin = { kind: 'session', id: session.id }
+      const core = item && { ...item, sessionIds: (buckets.rows.get(item.workspaceId) ?? []).filter(row => !isPinned({ kind: 'session', id: row.id })).map(row => row.id) }
       return [
+        pinAction(pin),
         {
           label: '重命名',
           icon: 'edit',
@@ -360,37 +403,38 @@ export function createSidebar(
               ),
             ),
         },
-        ...([-1, 1] as const).map(direction => ({
-          label: direction === -1 ? '上移' : '下移',
-          icon: direction === -1 ? ('up' as const) : ('down' as const),
-          disabled:
+        ...(isPinned(pin)
+          ? pinnedMoves(pin)
+          : item?.kind === 'chat'
+            ? []
+            : ([-1, 1] as const).map(direction => ({
+                label: direction === -1 ? '上移' : '下移',
+                icon: direction === -1 ? ('up' as const) : ('down' as const),
+                disabled:
             !core || sessionMoveAnchor(core, session.id, direction) === null,
-          run: () =>
-            perform(async () => {
-              if (core) {
-                const anchor = sessionMoveAnchor(core, session.id, direction)
-                if (anchor !== null) {
-                  await workspaces.insertSessionBefore(
-                    core.workspaceId,
-                    session.id,
-                    anchor,
-                  )
-                }
-              }
-            }),
-        })),
+                run: () =>
+                  perform(async () => {
+                    if (core) {
+                      const anchor = sessionMoveAnchor(core, session.id, direction)
+                      if (anchor !== null) {
+                        await workspaces.insertSessionBefore(
+                          core.workspaceId,
+                          session.id,
+                          anchor,
+                        )
+                      }
+                    }
+                  }),
+              }))),
         {
           label: '归档会话',
           icon: 'archive',
-          run: () =>
-            perform(async () => {
-              await workspaces.archiveSession(session.id)
-              setNotice('会话已归档')
-            }),
+          run: () => archive(session),
         },
       ]
     }
     const workspaceActions = (item: RegistryItem): MenuAction[] => [
+      ...(item.kind === 'chat' ? [] : [pinAction({ kind: 'workspace', id: item.workspaceId })]),
       {
         label: '新建会话',
         icon: 'chat',
@@ -406,22 +450,24 @@ export function createSidebar(
         icon: 'edit',
         run: () => begin({ type: 'rename-workspace', item }),
       },
-      ...([-1, 1] as const).map(direction => ({
-        label: direction === -1 ? '上移' : '下移',
-        icon: direction === -1 ? ('up' as const) : ('down' as const),
-        disabled:
-          moveAnchor(workspaceState.items, item.workspaceId, direction)
+      ...(isPinned({ kind: 'workspace', id: item.workspaceId })
+        ? pinnedMoves({ kind: 'workspace', id: item.workspaceId })
+        : ([-1, 1] as const).map(direction => ({
+            label: direction === -1 ? '上移' : '下移',
+            icon: direction === -1 ? ('up' as const) : ('down' as const),
+            disabled:
+          moveAnchor(workspacePeers(item), item.workspaceId, direction)
           === null,
-        run: () => {
-          const anchor = moveAnchor(
-            workspaceState.items,
-            item.workspaceId,
-            direction,
-          )
-          if (anchor !== null)
-            perform(() => workspaces.insertBefore(item.workspaceId, anchor))
-        },
-      })),
+            run: () => {
+              const anchor = moveAnchor(
+                workspacePeers(item),
+                item.workspaceId,
+                direction,
+              )
+              if (anchor !== null)
+                perform(() => workspaces.insertBefore(item.workspaceId, anchor))
+            },
+          }))),
       ...(item.kind === 'plain'
         ? [
             {
@@ -474,14 +520,16 @@ export function createSidebar(
     const renderSession = (
       session: SessionView,
       item?: RegistryItem,
+      flat = false,
     ): unknown => {
       const status = sessionStatus(session)
       return e(
         'div',
         {
-          className: `dsh-space-session${sessionState.current === session.id ? ' current' : ''}`,
-          key: session.id,
-          onContextMenu: openContextMenu,
+          'className': `dsh-space-session${flat ? ' flat' : ''}${sessionState.current === session.id ? ' current' : ''}`,
+          'data-session-id': session.id,
+          'key': session.id,
+          'onContextMenu': openContextMenu,
         },
         e(
           'button',
@@ -491,6 +539,12 @@ export function createSidebar(
             'aria-current':
               sessionState.current === session.id ? 'page' : undefined,
             'title': `${session.displayTitle} · ${status.label}`,
+            'draggable': !busy && isPinned({ kind: 'session', id: session.id }),
+            'onDragStart': (event: DragEvent) => {
+              dragPin.current = { kind: 'session', id: session.id }
+              event.dataTransfer?.setData('text/plain', session.id)
+            },
+            'onDragEnd': () => { dragPin.current = undefined },
             'onClick': () => sessions.open(session.id),
           },
           e('span', {
@@ -511,6 +565,18 @@ export function createSidebar(
               )
             : null,
         ),
+        e(IconButton, {
+          icon: isPinned({ kind: 'session', id: session.id }) ? 'unpin' : 'pin',
+          label: `${isPinned({ kind: 'session', id: session.id }) ? '取消置顶' : '置顶'} ${session.displayTitle}`,
+          disabled: busy,
+          onClick: () => pinAction({ kind: 'session', id: session.id }).run(),
+        }),
+        e(IconButton, {
+          icon: 'archive',
+          label: `归档 ${session.displayTitle}`,
+          disabled: busy,
+          onClick: () => archive(session),
+        }),
         e(Menu, {
           label: `${session.displayTitle} 会话操作`,
           disabled: busy,
@@ -518,8 +584,21 @@ export function createSidebar(
         }),
       )
     }
-    const renderGroup = (item: RegistryItem): unknown => {
-      const rows = buckets.rows.get(item.workspaceId) ?? []
+    const renderLimited = <T>(rows: T[], key: string, label: string, current: (row: T) => boolean, render: (row: T) => unknown): unknown => {
+      const expanded = expandedLists.includes(key)
+      const visible = visibleEntries(rows, expanded, current)
+      const hidden = rows.length - visible.length
+      return e('div', null, ...visible.map(render), (hidden > 0 || (expanded && rows.length > 5))
+        ? e('button', {
+            'type': 'button',
+            'className': 'dsh-space-show-more',
+            'aria-label': `${expanded ? '收起列表' : '展开显示'} ${label}`,
+            'aria-expanded': expanded,
+            'onClick': () => setExpandedLists(old => expanded ? old.filter(id => id !== key) : [...old, key]),
+          }, expanded ? '收起列表' : `展开显示 · ${hidden}`)
+        : null)
+    }
+    const renderGroup = (item: RegistryItem, rows: SessionView[]): unknown => {
       const open = !collapsed.includes(item.workspaceId)
       const primary = item.members?.find(
         member => member.path === item.primary,
@@ -530,12 +609,15 @@ export function createSidebar(
           className: 'dsh-space-group',
           key: item.workspaceId,
           onDragOver: (event: DragEvent) => {
-            if (dragWorkspace.current)
+            if (dragWorkspace.current && !isPinned({ kind: 'workspace', id: item.workspaceId }))
               event.preventDefault()
           },
           onDrop: (event: DragEvent) => {
-            event.preventDefault()
             const from = dragWorkspace.current
+            if (!from || isPinned({ kind: 'workspace', id: item.workspaceId }))
+              return
+            event.preventDefault()
+            event.stopPropagation()
             dragWorkspace.current = undefined
             if (from && from !== item.workspaceId)
               perform(() => workspaces.insertBefore(from, item.workspaceId))
@@ -553,11 +635,15 @@ export function createSidebar(
               'title': `${item.title}\n${item.path}`,
               'draggable': !busy,
               'onDragStart': (event: DragEvent) => {
-                dragWorkspace.current = item.workspaceId
+                if (isPinned({ kind: 'workspace', id: item.workspaceId }))
+                  dragPin.current = { kind: 'workspace', id: item.workspaceId }
+                else
+                  dragWorkspace.current = item.workspaceId
                 event.dataTransfer?.setData('text/plain', item.workspaceId)
               },
               'onDragEnd': () => {
                 dragWorkspace.current = undefined
+                dragPin.current = undefined
               },
               'onClick': () => toggle(item.workspaceId),
             },
@@ -609,13 +695,98 @@ export function createSidebar(
                 : '添加成员目录',
             )
           : null,
-        open ? rows.map(session => renderSession(session, item)) : null,
+        open ? renderLimited(rows, `workspace:${item.workspaceId}`, item.title, row => row.id === sessionState.current, session => renderSession(session, item)) : null,
       )
+    }
+    const sectionLabels: Record<SectionId, string> = { pinned: '置顶', chats: '独立对话', workspaces: '工作区' }
+    const renderSection = (id: SectionId): unknown => {
+      const open = !layout.collapsed.includes(id)
+      const index = layout.sections.indexOf(id)
+      const actions: MenuAction[] = ([-1, 1] as const).map(direction => ({
+        label: direction === -1 ? '上移分区' : '下移分区',
+        icon: direction === -1 ? 'up' : 'down',
+        disabled: index + direction < 0 || index + direction >= layout.sections.length,
+        run: () => layoutStore.moveSection(id, direction < 0 ? layout.sections[index - 1] : layout.sections[index + 2]),
+      }))
+      if (id === 'chats')
+        actions.push({ label: '管理对话目录', icon: 'folder', run: () => begin({ type: 'chat-directories' }) })
+      return e('section', {
+        'key': id,
+        'className': 'dsh-space-section',
+        'aria-label': sectionLabels[id],
+        'data-section': id,
+        'onDragOver': (event: DragEvent) => {
+          if (dragSection.current)
+            event.preventDefault()
+        },
+        'onDrop': (event: DragEvent) => {
+          if (!dragSection.current)
+            return
+          event.preventDefault()
+          layoutStore.moveSection(dragSection.current, id)
+          dragSection.current = undefined
+        },
+      }, e('div', { className: 'dsh-space-section-head', onContextMenu: openContextMenu }, e('button', {
+        'type': 'button',
+        'className': 'dsh-space-section-title',
+        'aria-expanded': open,
+        'aria-label': sectionLabels[id],
+        'draggable': !busy,
+        'onDragStart': (event: DragEvent) => {
+          dragSection.current = id
+          event.dataTransfer?.setData('text/plain', id)
+        },
+        'onDragEnd': () => { dragSection.current = undefined },
+        'onClick': () => layoutStore.setCollapsed(id, open),
+      }, sectionLabels[id], e(Icon, { name: open ? 'chevronDown' : 'chevronRight', size: 12 })), e(Menu, { label: `${sectionLabels[id]}分区操作`, actions, disabled: busy }), id === 'chats' ? e(IconButton, { icon: 'chat', label: '新建独立对话', disabled: busy || !registry, onClick: createChat }) : null, id === 'workspaces'
+        ? e(Menu, { label: '添加工作区', icon: 'plus', disabled: busy, actions: [
+            { label: '创建空间', icon: 'layers', disabled: !registry, run: () => begin({ type: 'create-space' }) },
+            { label: '添加目录工作区', icon: 'folderPlus', run: () => begin({ type: 'add-directory' }) },
+          ] })
+        : null), open
+        ? renderLimited(sections[id], id, sectionLabels[id], ownsCurrent, entry => e('div', {
+            key: `${entryPin(entry).kind}:${entryPin(entry).id}`,
+            onDragOver: (event: DragEvent) => {
+              if (id === 'pinned' && dragPin.current)
+                event.preventDefault()
+            },
+            onDrop: (event: DragEvent) => {
+              if (id !== 'pinned' || !dragPin.current)
+                return
+              event.preventDefault()
+              event.stopPropagation()
+              layoutStore.movePin(dragPin.current, entryPin(entry))
+              dragPin.current = undefined
+            },
+          }, entry.kind === 'workspace' ? renderGroup(entry.item, entry.rows) : renderSession(entry.session, entry.item, true)))
+        : null, open && !sections[id].length ? e('div', { className: 'dsh-space-section-empty' }, id === 'pinned' ? '暂无置顶' : id === 'chats' ? '暂无独立对话' : '暂无工作区') : null)
     }
     const renderDialog = (): unknown => {
       if (!dialog)
         return null
       const props = { busy, error, onClose: close }
+      if (dialog.type === 'chat-directories') {
+        return e(
+          Modal,
+          { ...props, title: '对话目录' },
+          ...items.filter(item => item.kind === 'chat').map(item => e(
+            'div',
+            { key: item.workspaceId, className: 'dsh-space-directory-row' },
+            e('div', { className: 'dsh-space-heading-text' }, e('strong', null, item.title), e('code', null, item.path)),
+            e(IconButton, {
+              icon: 'chat',
+              label: `在 ${item.title} 中新建会话`,
+              disabled: busy,
+              onClick: () => {
+                close()
+                workspaces.startSession(item.workspaceId)
+              },
+            }),
+            e(Menu, { label: `${item.title} 工作区操作`, actions: workspaceActions(item), disabled: busy }),
+          )),
+          !items.some(item => item.kind === 'chat') ? e('p', { className: 'dsh-space-muted' }, '暂无对话目录') : null,
+        )
+      }
       const onPick = (accept: (path: string) => void): void => perform(async () => {
         const path = await workspaces.pickDirectory()
         if (path)
@@ -1085,35 +1256,6 @@ export function createSidebar(
       renderDialog(),
       e(
         'div',
-        { className: 'dsh-space-toolbar' },
-        e('span', { className: 'dsh-space-toolbar-title' }, '工作区'),
-        e(IconButton, {
-          icon: 'chat',
-          label: '新建独立对话',
-          disabled: busy || !registry,
-          onClick: createChat,
-        }),
-        e(Menu, {
-          label: '添加工作区',
-          icon: 'plus',
-          disabled: busy,
-          actions: [
-            {
-              label: '创建空间',
-              icon: 'layers',
-              disabled: !registry,
-              run: openSpace,
-            },
-            {
-              label: '添加目录工作区',
-              icon: 'folderPlus',
-              run: () => begin({ type: 'add-directory' }),
-            },
-          ],
-        }),
-      ),
-      e(
-        'div',
         { className: 'dsh-space-search-wrap' },
         e(Icon, { name: 'search', size: 14 }),
         e('input', {
@@ -1195,8 +1337,8 @@ export function createSidebar(
           : e(
               'div',
               null,
-              ...items.map(renderGroup),
-              workspaceState.phase === 'ready' && buckets.misc.length
+              ...layout.sections.map(renderSection),
+              workspaceState.phase === 'ready' && buckets.misc.some(row => !isPinned({ kind: 'session', id: row.id }))
                 ? e(
                     'section',
                     { className: 'dsh-space-group' },
@@ -1205,7 +1347,7 @@ export function createSidebar(
                       { className: 'dsh-space-toolbar-title' },
                       '未归组',
                     ),
-                    ...buckets.misc.map(row => renderSession(row)),
+                    ...buckets.misc.filter(row => !isPinned({ kind: 'session', id: row.id })).map(row => renderSession(row, undefined, true)),
                   )
                 : null,
               workspaceState.phase === 'pending'
@@ -1214,28 +1356,6 @@ export function createSidebar(
                     'div',
                     { className: 'dsh-space-empty', role: 'status' },
                     '加载工作区…',
-                  )
-                : null,
-              workspaceState.phase === 'ready' && !items.length
-                ? e(
-                    'div',
-                    { className: 'dsh-space-empty' },
-                    e(Icon, { name: 'folder', size: 24 }),
-                    e(
-                      'span',
-                      { className: 'dsh-space-empty-title' },
-                      '暂无工作区',
-                    ),
-                    e(
-                      'button',
-                      {
-                        type: 'button',
-                        className: 'dsh-space-button',
-                        disabled: busy,
-                        onClick: () => begin({ type: 'add-directory' }),
-                      },
-                      '添加目录工作区',
-                    ),
                   )
                 : null,
             ),

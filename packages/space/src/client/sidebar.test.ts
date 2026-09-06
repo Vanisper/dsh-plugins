@@ -91,7 +91,7 @@ async function mount(wide = true) {
   }
   const workspaceSnapshot = {
     items: [item],
-    archivedSessionIds: [],
+    archivedSessionIds: [] as string[],
     phase: 'ready' as const,
     state: 'idle' as const,
     error: null,
@@ -180,6 +180,80 @@ async function registry(value: RegistryPayload | undefined): Promise<void> {
 }
 
 describe('侧栏交互', () => {
+  it('置顶工作区与单个会话只改变展示位置，取消后恢复归属', async () => {
+    const { workspaces } = await mount()
+    await act(async () => document.querySelector<HTMLButtonElement>('.dsh-space-head [role="menuitem"]')!.click())
+    expect(document.querySelector('[data-section="pinned"] .dsh-space-group')).not.toBeNull()
+    expect(document.querySelector('[data-section="workspaces"] .dsh-space-group')).toBeNull()
+    await click('置顶 已有会话')
+    expect(document.querySelectorAll('[data-session-id="s"]')).toHaveLength(1)
+    expect(document.querySelector('[data-section="pinned"] .dsh-space-group [data-session-id="s"]')).toBeNull()
+    await click('取消置顶 已有会话')
+    expect(document.querySelector('[data-section="pinned"] .dsh-space-group [data-session-id="s"]')).not.toBeNull()
+    await act(async () => document.querySelector<HTMLButtonElement>('.dsh-space-head [role="menuitem"]')!.click())
+    expect(document.querySelector('[data-section="workspaces"] [data-session-id="s"]')).not.toBeNull()
+    expect(workspaces.insertBefore).not.toHaveBeenCalled()
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('大分区可以独立折叠、排序，折叠后仍可创建', async () => {
+    await mount()
+    await click('工作区')
+    expect(document.querySelector('.dsh-space-group')).toBeNull()
+    expect(button('添加工作区').disabled).toBe(false)
+    await click('下移分区')
+    expect(Array.from(document.querySelectorAll('[data-section]')).map(node => node.getAttribute('data-section'))).toEqual(['chats', 'pinned', 'workspaces'])
+    await click('创建空间')
+    expect(document.querySelector('dialog')?.getAttribute('aria-label')).toBe('创建空间')
+  })
+
+  it('独立对话平铺且目录可单独管理，描述不可用时退回核心分组', async () => {
+    const { item } = await mount()
+    await registry({ ...fixture.registry!, items: [{ ...item, kind: 'chat' }] })
+    expect(document.querySelector('[data-section="chats"] [data-session-id="s"]')).not.toBeNull()
+    expect(document.querySelector('[data-section="chats"] .dsh-space-group')).toBeNull()
+    await click('管理对话目录')
+    expect(document.querySelector('dialog')?.textContent).toContain('/workspace')
+    await click('关闭')
+    await registry(undefined)
+    expect(document.querySelector('[data-section="workspaces"] [data-session-id="s"]')).not.toBeNull()
+  })
+
+  it('快捷归档失败保留置顶；成功调用官方接口后去除置顶', async () => {
+    const { workspaces, workspaceSnapshot } = await mount()
+    await click('置顶 已有会话')
+    vi.mocked(workspaces.archiveSession).mockRejectedValueOnce(new Error('离线'))
+    await click('归档 已有会话')
+    expect(document.querySelector('[data-section="pinned"] [data-session-id="s"]')).not.toBeNull()
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe('离线')
+    vi.mocked(workspaces.archiveSession).mockImplementationOnce(async () => {
+      workspaceSnapshot.archivedSessionIds.push('s')
+    })
+    await click('归档 已有会话')
+    await registry({ ...fixture.registry! })
+    expect(document.querySelector('[data-session-id="s"]')).toBeNull()
+    expect(JSON.parse(localStorage.getItem('dsh-space.sidebar.layout')!).pins).toEqual([])
+  })
+
+  it('长列表折叠时保留当前会话，展开和收起不改核心顺序', async () => {
+    const { sessionSnapshot, workspaceSnapshot, workspaces } = await mount()
+    for (let index = 0; index < 7; index++) {
+      const id = `extra-${index}`
+      sessionSnapshot.ids.unshift(id)
+      Object.assign(sessionSnapshot.byId, { [id]: { id, displayTitle: id, updatedAt: index, blank: false, running: false } })
+      workspaceSnapshot.items[0]!.sessionIds.unshift(id)
+    }
+    await registry({ ...fixture.registry! })
+    expect(document.querySelectorAll('.dsh-space-session')).toHaveLength(6)
+    expect(button('已有会话').getAttribute('aria-current')).toBe('page')
+    await click('展开显示 演示空间')
+    expect(document.querySelectorAll('.dsh-space-session')).toHaveLength(8)
+    await click('收起列表 演示空间')
+    expect(document.querySelectorAll('.dsh-space-session')).toHaveLength(6)
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+  })
+
   it('成员修改是草稿，取消不写入且释放模式锁', async () => {
     const { mode } = await mount()
     await click('2 个成员 · 主要 a')

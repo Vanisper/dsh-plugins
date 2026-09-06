@@ -27,7 +27,7 @@ describe('侧栏展示偏好', () => {
     store.movePin(session, workspace)
     store.moveSection('workspaces', 'pinned')
     store.setCollapsed('pinned', true)
-    expect(store.getSnapshot()).toEqual({ pins: [session, workspace], sections: ['workspaces', 'pinned', 'chats'], collapsed: ['pinned'] })
+    expect(store.getSnapshot()).toMatchObject({ pins: [session, workspace], sections: ['workspaces', 'pinned', 'chats'], collapsed: ['pinned'] })
     store.setPinned(session, false)
     expect(store.getSnapshot().pins).toEqual([workspace])
   })
@@ -60,6 +60,47 @@ describe('侧栏展示偏好', () => {
     store.setCollapsed('pinned', true)
     expect(store.getSnapshot().pins).toHaveLength(1)
     expect(store.getSnapshot().collapsed).toEqual(['pinned'])
+  })
+
+  it('兼容旧偏好并过滤失效分组输入', () => {
+    localStorage.setItem('dsh-space.sidebar.layout', JSON.stringify({ groups: [null, { id: 'g', title: ' 分组 ', color: 'invalid' }, { id: 'g', title: '重复' }], assignments: { s: 'g', orphan: 'gone' }, view: 'invalid', sessionSort: 'created' }))
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ view: 'workspaces', sessionSort: 'updated', groups: [{ id: 'g', title: '分组', color: 'gray', collapsed: false }], assignments: { s: 'g' } })
+  })
+
+  it('每个会话只分配一个分组，删除分组不影响置顶且清理全部标记', () => {
+    const store = createLayoutStore()
+    store.saveGroup({ id: 'g', title: '一', color: 'blue', collapsed: false }, true)
+    store.saveGroup({ id: 'h', title: '二', color: 'green', collapsed: false }, true)
+    store.setPinned({ kind: 'session', id: 's' }, true)
+    store.assignGroup('s', 'g')
+    store.assignGroup('s', 'h')
+    store.assignGroup('archived', 'h')
+    expect(store.getSnapshot().assignments).toEqual({ s: 'h', archived: 'h' })
+    store.moveGroup('h', 'g')
+    expect(store.getSnapshot().groups[0]?.id).toBe('h')
+    store.deleteGroup('h')
+    expect(store.getSnapshot().assignments).toEqual({})
+    expect(store.getSnapshot().pins).toHaveLength(1)
+    expect(createLayoutStore().getSnapshot()).toEqual(store.getSnapshot())
+  })
+
+  it('拒绝空白及重复名称，跨页删除后不复活旧分组', () => {
+    const store = createLayoutStore()
+    const group = { id: 'g', title: '一', color: 'blue' as const, collapsed: false }
+    store.saveGroup(group, true)
+    expect(() => store.saveGroup({ ...group, title: ' ' })).toThrow('名称')
+    expect(() => store.saveGroup({ ...group, id: 'h' }, true)).toThrow('同名')
+    createLayoutStore().deleteGroup('g')
+    expect(() => store.saveGroup(group)).toThrow('已被移除')
+    expect(() => store.assignGroup('s', 'g')).toThrow('已被移除')
+  })
+
+  it('切换视图和排序不会覆盖其他页面的分组变更', () => {
+    const store = createLayoutStore()
+    createLayoutStore().saveGroup({ id: 'g', title: '一', color: 'blue', collapsed: false }, true)
+    store.setView('groups')
+    store.setSort({ workspaceSort: 'updated', sessionSort: 'title' })
+    expect(store.getSnapshot()).toMatchObject({ view: 'groups', workspaceSort: 'updated', sessionSort: 'title', groups: [{ id: 'g' }] })
   })
 })
 

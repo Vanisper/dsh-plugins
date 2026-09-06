@@ -7,10 +7,24 @@ export interface Pin {
   kind: 'workspace' | 'session'
   id: string
 }
+export const GROUP_COLORS = { gray: '灰色', red: '红色', orange: '橙色', yellow: '黄色', green: '绿色', blue: '蓝色', purple: '紫色' } as const
+export type GroupColor = keyof typeof GROUP_COLORS
+export type SidebarView = 'workspaces' | 'groups'
+export interface DisplayGroup {
+  id: string
+  title: string
+  color: GroupColor
+  collapsed: boolean
+}
 export interface SidebarLayout {
   pins: Pin[]
   sections: SectionId[]
   collapsed: SectionId[]
+  view: SidebarView
+  workspaceSort: 'manual' | 'updated'
+  sessionSort: 'updated' | 'title'
+  groups: DisplayGroup[]
+  assignments: Record<string, string>
 }
 export interface LayoutStore {
   getSnapshot: () => SidebarLayout
@@ -19,13 +33,19 @@ export interface LayoutStore {
   setCollapsed: (section: SectionId, collapsed: boolean) => void
   moveSection: (section: SectionId, before?: SectionId) => void
   movePin: (pin: Pin, before?: Pin) => void
+  setView: (view: SidebarView) => void
+  setSort: (sort: Partial<Pick<SidebarLayout, 'workspaceSort' | 'sessionSort'>>) => void
+  saveGroup: (group: DisplayGroup, create?: boolean) => void
+  deleteGroup: (id: string) => void
+  assignGroup: (sessionId: string, groupId?: string) => void
+  moveGroup: (id: string, before?: string) => void
 }
 export type LayoutEntry
   = | { kind: 'workspace', item: RegistryItem, rows: SessionView[] }
     | { kind: 'session', session: SessionView, item?: RegistryItem }
 
 const STORAGE_KEY = 'dsh-space.sidebar.layout'
-const defaults = (): SidebarLayout => ({ pins: [], sections: [...SECTION_IDS], collapsed: [] })
+const defaults = (): SidebarLayout => ({ pins: [], sections: [...SECTION_IDS], collapsed: [], view: 'workspaces', workspaceSort: 'manual', sessionSort: 'updated', groups: [], assignments: {} })
 const samePin = (a: Pin, b: Pin): boolean => a.kind === b.kind && a.id === b.id
 const isSection = (value: unknown): value is SectionId => SECTION_IDS.includes(value as SectionId)
 
@@ -41,7 +61,23 @@ function decode(raw: string | null): SidebarLayout {
     }
     const sections = (Array.isArray(data.sections) ? data.sections : []).filter(isSection) as SectionId[]
     const collapsed = (Array.isArray(data.collapsed) ? data.collapsed : []).filter(isSection) as SectionId[]
-    return { pins, sections: [...new Set([...sections, ...SECTION_IDS])], collapsed: [...new Set(collapsed)] }
+    const groups: DisplayGroup[] = []
+    for (const group of Array.isArray(data.groups) ? data.groups : []) {
+      if (group && typeof group.id === 'string' && group.id && typeof group.title === 'string' && group.title.trim() && !groups.some(value => value.id === group.id)) {
+        groups.push({ id: group.id, title: group.title.trim().slice(0, 80), color: Object.hasOwn(GROUP_COLORS, group.color) ? group.color : 'gray', collapsed: group.collapsed === true })
+      }
+    }
+    const assignments = Object.fromEntries(Object.entries(data.assignments && typeof data.assignments === 'object' && !Array.isArray(data.assignments) ? data.assignments : {}).filter(([id, groupId]) => id && groups.some(group => group.id === groupId))) as Record<string, string>
+    return {
+      pins,
+      sections: [...new Set([...sections, ...SECTION_IDS])],
+      collapsed: [...new Set(collapsed)],
+      groups,
+      assignments,
+      view: data.view === 'groups' ? 'groups' : 'workspaces',
+      workspaceSort: data.workspaceSort === 'updated' ? 'updated' : 'manual',
+      sessionSort: data.sessionSort === 'title' ? 'title' : 'updated',
+    }
   }
   catch {
     return defaults()
@@ -124,6 +160,50 @@ export function createLayoutStore(): LayoutStore {
         const index = before ? pins.findIndex(item => samePin(item, before)) : -1
         pins.splice(index < 0 ? pins.length : index, 0, pin)
         return { ...value, pins }
+      })
+    },
+    setView: view => change(value => ({ ...value, view })),
+    setSort: sort => change(value => ({ ...value, ...sort })),
+    saveGroup(group, create = false): void {
+      change((value) => {
+        const exists = value.groups.some(item => item.id === group.id)
+        if (!create && !exists)
+          throw new Error('分组已被移除，请关闭后重新检查')
+        if (create && exists)
+          throw new Error('分组已存在')
+        const title = group.title.trim()
+        if (!title || title.length > 80)
+          throw new Error('分组名称需为 1 至 80 个字符')
+        if (!Object.hasOwn(GROUP_COLORS, group.color))
+          throw new Error('请选择有效的分组颜色')
+        if (value.groups.some(item => item.id !== group.id && item.title === title))
+          throw new Error('已有同名分组')
+        const next = { ...group, title }
+        return { ...value, groups: exists ? value.groups.map(item => item.id === group.id ? next : item) : [...value.groups, next] }
+      })
+    },
+    deleteGroup(id): void {
+      change(value => ({ ...value, groups: value.groups.filter(group => group.id !== id), assignments: Object.fromEntries(Object.entries(value.assignments).filter(([, groupId]) => groupId !== id)) }))
+    },
+    assignGroup(sessionId, groupId): void {
+      change((value) => {
+        if (groupId && !value.groups.some(group => group.id === groupId))
+          throw new Error('目标分组已被移除')
+        const assignments = Object.fromEntries(Object.entries(value.assignments).filter(([id]) => id !== sessionId))
+        if (groupId)
+          Object.defineProperty(assignments, sessionId, { value: groupId, enumerable: true, configurable: true, writable: true })
+        return { ...value, assignments }
+      })
+    },
+    moveGroup(id, before): void {
+      change((value) => {
+        const group = value.groups.find(group => group.id === id)
+        if (!group || id === before)
+          return value
+        const groups = value.groups.filter(group => group.id !== id)
+        const index = groups.findIndex(group => group.id === before)
+        groups.splice(index < 0 ? groups.length : index, 0, group)
+        return { ...value, groups }
       })
     },
   }

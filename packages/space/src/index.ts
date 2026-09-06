@@ -1,29 +1,21 @@
-// @env node
-// dsh-space 插件入口：装配 settings 注册表、space 工具、/space 命令、空间地图上下文与工作区自动登记
 import type { Context } from '@deepseek-ai/cordis'
-import { registerCommand } from './command.ts'
-import { PLUGIN_NAME } from './constants.ts'
-import { registerPromptContext } from './prompt.ts'
-import { registerSpacesStore } from './registry.ts'
-import { registerTool } from './tool.ts'
-import { startWorkspaceRegistration } from './workspaces.ts'
-
-export interface DshSpaceConfig {
-  /** 是否把空间成员自动登记为核心 workspace（默认 true） */
-  registerWorkspaces?: boolean
-}
+import { createSpaceOperations } from './business/operations.ts'
+import { registerCommand } from './host/command.ts'
+import { registerHttpApi } from './host/http.ts'
+import { registerPromptContext } from './host/prompt.ts'
+import { registerTool } from './host/tool.ts'
+import { PLUGIN_NAME } from './shared/constants.ts'
+import { registerSpaceStore } from './store/settings.ts'
+import { createWorkspaceService } from './workspace/core.ts'
 
 export default {
   name: PLUGIN_NAME,
-  inject: ['settings', 'tools', 'systemPrompt', 'commands'],
-  apply(ctx: Context, config: DshSpaceConfig) {
-    const log = (message: string): void => console.warn(message)
-    const store = registerSpacesStore(ctx.settings)
-    const refresh = config?.registerWorkspaces === false
-      ? (): void => {}
-      : startWorkspaceRegistration(ctx, store, log)
-    registerTool(ctx, store, store.save, refresh)
-    registerCommand(ctx, store, refresh)
-    registerPromptContext(ctx, store)
+  inject: ['settings', 'workspaceRegistry', 'webServer', 'tools', 'commands', 'systemPrompt'],
+  apply(ctx: Context) {
+    const operations = createSpaceOperations(registerSpaceStore(ctx.settings), createWorkspaceService(ctx))
+    ctx.effect(() => registerHttpApi(ctx, operations), 'dsh-space http')
+    ctx.effect(() => registerCommand(ctx, operations), 'dsh-space command')
+    ctx.effect(() => registerTool(ctx, operations), 'dsh-space tool')
+    ctx.effect(() => registerPromptContext(ctx, operations), 'dsh-space prompt')
   },
 }

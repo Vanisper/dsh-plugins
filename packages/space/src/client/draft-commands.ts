@@ -13,7 +13,7 @@ export interface DraftCommands {
   pick: (source: string, index: number) => void
   close: () => void
   dismiss: () => void
-  toggle: (onAddImages: () => void) => void
+  toggle: () => void
   track: (text: string, caret: number, guard: TriggerGuard, draftRev: number) => void
   arbitrate: (key: ArbitrateKey, composing: boolean) => ArbitrateOutcome
   onSpace: () => boolean
@@ -62,7 +62,6 @@ export function createDraftCommands(
   let disposed = false
   let submitting = false
   let lifecycle = 0
-  let addImages: (() => void) | undefined
   let hit: TriggerHit | null = null
   const reduce = (event: MenuEvent): void => menu.set(native.reduce(menu.getSnapshot(), event))
   const editable = (): boolean => !disposed && input.snapshot.phase === 'plain'
@@ -88,8 +87,8 @@ export function createDraftCommands(
     return [...state.commands, ...client].map((item) => {
       const supported = item.name === 'model' ? client.includes(item) : ['goal', 'plan', 'permission'].includes(item.name)
       const disabledReason = supported ? undefined : '此命令尚未适配草稿，请在创建会话后使用'
-      return { ...item, disabledReason, description: disabledReason ? `${item.description} · ${disabledReason}` : item.description }
-    }).sort((a, b) => a.name.localeCompare(b.name))
+      return { ...item, disabledReason }
+    })
   }
   const available = (name: string): void => {
     const item = catalog().find(item => item.name === name)
@@ -107,8 +106,6 @@ export function createDraftCommands(
     catch (cause) {
       items = [{ name: '重试命令目录', description: cause instanceof Error ? cause.message : String(cause) }]
     }
-    if (launcher.getSnapshot() && addImages)
-      items.unshift({ name: '添加图片' })
     reduce({ type: 'source-settled', source: 'command', generation: current.generation, items })
   }
   const open = (next: TriggerHit, launched: boolean): void => {
@@ -116,7 +113,7 @@ export function createDraftCommands(
     popup.dismiss()
     hit = next
     launcher.set(launched ? 'command' : null)
-    menu.set(native.seed(menu.getSnapshot(), [{ name: 'command', showGroupTitle: false }]))
+    menu.set(native.seed(menu.getSnapshot(), [{ name: 'command', showGroupTitle: true }]))
     reduce({ type: 'hit', hit })
     if (refreshDirectory) {
       void options.load().then(() => {
@@ -186,11 +183,6 @@ export function createDraftCommands(
       return
     if (item.disabledReason) {
       notify(item.disabledReason)
-      return
-    }
-    if (item.name === '添加图片') {
-      dismiss()
-      addImages?.()
       return
     }
     if (item.name === '重试命令目录') {
@@ -288,10 +280,9 @@ export function createDraftCommands(
     pick,
     close,
     dismiss,
-    toggle(onAddImages: () => void) {
+    toggle() {
       if (!editable())
         return
-      addImages = onAddImages
       if (launcher.getSnapshot()) {
         dismiss()
         return

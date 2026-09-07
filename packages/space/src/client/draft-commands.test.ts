@@ -49,16 +49,15 @@ function harness() {
     input.dispose()
     options.dispose()
   })
-  const images = vi.fn()
   const pick = async (name: string) => {
-    commands.toggle(images)
+    commands.toggle()
     await vi.waitFor(() => expect(commands.menu.getSnapshot().groups[0]?.status).toBe('ready'))
     const index = commands.menu.getSnapshot().groups[0]!.items.findIndex(item => item.name === name)
     expect(index).toBeGreaterThanOrEqual(0)
     commands.pick('command', index)
   }
   const popupReady = async () => vi.waitFor(() => expect(commands.popup.state.getSnapshot().status).toBe('ready'))
-  return { input, options, commands, fetch, client, sink, focus, images, pick, popupReady, setData: (next: Partial<DraftOptions>) => {
+  return { input, options, commands, fetch, client, sink, focus, pick, popupReady, setData: (next: Partial<DraftOptions>) => {
     data = { ...data, ...next }
   } }
 }
@@ -69,7 +68,10 @@ describe('无实体原生命令适配', () => {
     h.client.push({ name: 'extension', description: 'Extension' })
     await h.pick('clear')
     expect(h.input.notices.getSnapshot()).toMatchObject({ text: expect.stringContaining('尚未适配草稿') })
-    expect(h.commands.menu.getSnapshot().groups[0]!.items.map(item => item.name)).toEqual(['添加图片', 'clear', 'extension', 'goal', 'model', 'permission', 'plan'])
+    const group = h.commands.menu.getSnapshot().groups[0]!
+    expect(group.items.map(item => item.name)).toEqual(['goal', 'plan', 'permission', 'clear', 'model', 'extension'])
+    expect(group.showGroupTitle).not.toBe(false)
+    expect(group.items.find(item => item.name === 'clear')?.description).toBe('clear description')
     expect(h.sink).not.toHaveBeenCalled()
   })
 
@@ -111,7 +113,7 @@ describe('无实体原生命令适配', () => {
     expect(h.fetch).toHaveBeenCalledTimes(1)
     expect(h.commands.menu.getSnapshot().groups[0]?.items.map(item => item.name)).toEqual(['plan'])
     h.commands.close()
-    h.commands.toggle(h.images)
+    h.commands.toggle()
     await h.options.load()
     expect(h.fetch).toHaveBeenCalledTimes(2)
   })
@@ -216,15 +218,25 @@ describe('无实体原生命令适配', () => {
     expect(h.sink).not.toHaveBeenCalled()
   })
 
-  it('附件入口仍只在点击时调用，退出和目录读取不会打开文件选择器', async () => {
+  it('下一次打开反映新增和卸载的注册，目录不添加附件等自定义入口', async () => {
     const h = harness()
-    await h.pick('添加图片')
-    expect(h.images).toHaveBeenCalledTimes(1)
-    h.commands.toggle(h.images)
-    h.commands.arbitrate('escape', false)
-    await h.options.load()
-    expect(h.images).toHaveBeenCalledTimes(1)
-    expect(h.commands.menu.getSnapshot().open).toBe(false)
+    await h.pick('clear')
+    h.commands.close()
+    h.client.push({ name: 'extension', description: 'Extension' })
+    h.setData({ commands: [{ name: 'custom-host', description: 'Custom host' }] })
+    await h.pick('extension')
+    expect(h.commands.menu.getSnapshot().groups[0]!.items).toEqual([
+      { name: 'custom-host', description: 'Custom host', disabledReason: expect.any(String) },
+      { name: 'model', description: 'Model', disabledReason: undefined },
+      { name: 'extension', description: 'Extension', disabledReason: expect.any(String) },
+    ])
+    h.commands.close()
+    h.client.pop()
+    h.setData({ commands: [] })
+    h.commands.toggle()
+    await vi.waitFor(() => expect(h.commands.menu.getSnapshot().groups[0]?.status).toBe('ready'))
+    expect(h.commands.menu.getSnapshot().groups[0]!.items.map(item => item.name)).toEqual(['model'])
+    expect(h.sink).not.toHaveBeenCalled()
   })
 
   it('目录失败可原位重试，成功后不保留过期错误或虚构命令', async () => {
@@ -242,7 +254,7 @@ describe('无实体原生命令适配', () => {
   it('冲突和缺失的命令不被内置适配器偷偷补回', async () => {
     const h = harness()
     h.setData({ commands: [{ name: 'model', description: 'Collision' }] })
-    h.commands.toggle(h.images)
+    h.commands.toggle()
     await vi.waitFor(() => expect(h.commands.menu.getSnapshot().groups[0]?.items.at(-1)?.description).toContain('重名'))
     h.commands.close()
     h.setData({ commands: [] })

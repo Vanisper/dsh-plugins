@@ -180,8 +180,12 @@ export function createDraftComposer(
     install(mode, Picker) {
       const disposers: Array<() => void> = []
       let undo: (() => void) | undefined
+      let resumeDraft = false
       const sync = (): void => {
         if (mode.getSnapshot().mode === 'official') {
+          // 恢复官方策略会自动选中真实会话，先保存空间模式的编辑位置
+          if (undo)
+            resumeDraft = draft.getSnapshot().active
           commands.close()
           undo?.()
           undo = undefined
@@ -223,7 +227,6 @@ export function createDraftComposer(
             const localMenu = useNativeSnapshot(React, commands.launcher)
             const settings = React.useSyncExternalStore(options.subscribe, options.getSnapshot)
             React.useSyncExternalStore(draft.subscribe, draft.getSnapshot)
-            const fileInput = React.useRef<HTMLInputElement | null>(null)
             const isDraft = props.sessionId === undefined
             const busy = input.snapshot.phase === 'submitting' || input.snapshot.phase === 'adjudicating'
             React.useEffect(() => {
@@ -247,19 +250,7 @@ export function createDraftComposer(
             const locale = (ctx as { get: (name: string) => any }).get('locale')
             return e('div', { style: { display: 'contents' }, ref: (element: HTMLElement | null) => {
               composerElement = element
-            } }, e('input', {
-              type: 'file',
-              hidden: true,
-              multiple: true,
-              accept: 'image/png,image/jpeg,image/webp,image/gif',
-              ref: fileInput,
-              onChange: (event: { target: HTMLInputElement }) => {
-                const error = addImages(Array.from(event.target.files ?? []))
-                event.target.value = ''
-                if (error)
-                  input.notify('error', error)
-              },
-            }), e(NativeBar, {
+            } }, e(NativeBar, {
               ...props,
               useInput: selectSnapshot(isDraft ? localInput : originalInput),
               useNotices: selectSnapshot(isDraft ? localNotices : originalNotices),
@@ -272,7 +263,7 @@ export function createDraftComposer(
                     keyboard: input,
                     disabled: busy,
                     placeholder: '有什么需要一起完成？',
-                    toggleCommandMenu: () => commands.toggle(() => fileInput.current?.click()),
+                    toggleCommandMenu: commands.toggle,
                     overlay: e('div', {
                       'data-dsh-draft-overlay': true,
                       'style': { display: 'contents' },
@@ -333,8 +324,9 @@ export function createDraftComposer(
           )))
           parts.push(extendNewSession(workspaces, id => draft.begin(id)))
           undo = () => parts.reverse().forEach(off => off())
-          if (sessions.list.getSnapshot().current === undefined)
+          if (resumeDraft || sessions.list.getSnapshot().current === undefined)
             draft.begin(draft.getSnapshot().targetId)
+          resumeDraft = false
         }
         catch (cause) {
           parts.reverse().forEach(off => off())

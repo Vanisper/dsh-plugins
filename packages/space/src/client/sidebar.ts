@@ -20,7 +20,7 @@ import { createControls } from './controls.ts'
 import { createDetails } from './details.ts'
 import { createGroupEditor } from './group-editor.ts'
 import { createLayoutStore, projectLayout, visibleEntries } from './layout.ts'
-import { createMemberEditor, memberLabel } from './member-editor.ts'
+import { createMemberEditor } from './member-editor.ts'
 import {
   groupSessions,
   moveAnchor,
@@ -76,9 +76,6 @@ function readCollapsed(): string[] {
 }
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-function kindLabel(kind: RegistryItem['kind']): string {
-  return kind === 'space' ? '空间' : kind === 'chat' ? '独立对话' : '目录'
 }
 function updatedLabel(timestamp: number): string {
   const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
@@ -148,13 +145,12 @@ export function createSidebar(
     const [members, setMembers] = React.useState<MemberDraft>({ members: [] })
     const [operationBusy, setBusy] = React.useState(false)
     const [info, setInfo] = React.useState<InfoState | null>(null)
-    const [infoEditing, setInfoEditing] = React.useState(false)
-    const infoEditingRef = React.useRef(false)
+    const pendingRenames = React.useRef(new Set<string>())
     const infoTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
     const anchors = React.useRef(new Map<string, HTMLElement>())
     const [groupDraft, setGroupDraft] = React.useState<{ group: DisplayGroup, original?: DisplayGroup } | null>(null)
     const groupReturnFocus = React.useRef<HTMLElement | null>(null)
-    const busy = operationBusy || infoEditing || !!groupDraft
+    const busy = operationBusy || !!groupDraft
     const busyRef = React.useRef(false)
     const createdId = React.useRef<string | undefined>(undefined)
     const descriptionRemoved = React.useRef<string | undefined>(undefined)
@@ -222,9 +218,9 @@ export function createSidebar(
         layoutStore.setGroupCollapsed(currentGroup, false)
     }, [sessionState.current, currentGroup, activeView])
     React.useEffect(() => {
-      if (info && !info.anchor.isConnected && !infoEditingRef.current)
+      if (info && !info.anchor.isConnected)
         setInfo(null)
-    }, [info, infoEditing, wide, query, sections])
+    }, [info, wide, query, sections])
 
     React.useEffect(
       () =>
@@ -362,20 +358,16 @@ export function createSidebar(
     const stopInfoTimer = (): void => clearTimeout(infoTimer.current)
     const leaveInfo = (): void => {
       stopInfoTimer()
-      infoTimer.current = setTimeout(() => {
-        if (!infoEditingRef.current && !document.querySelector('.dsh-space-details')?.contains(document.activeElement))
-          setInfo(null)
-      }, 220)
     }
     const showInfo = (target: Pin, edit = false, hover = false): void => {
       stopInfoTimer()
-      if (busyRef.current || infoEditingRef.current || dialog || groupDraft || archiveConfirmation)
+      if (busyRef.current || dialog || groupDraft || archiveConfirmation)
         return
       const anchor = anchors.current.get(JSON.stringify(target))
       if (!anchor?.isConnected)
         return
       const show = (): void => {
-        if (anchor.isConnected && !infoEditingRef.current && !busyRef.current)
+        if (anchor.isConnected && !busyRef.current)
           setInfo({ target, anchor, edit, focus: !hover })
       }
       if (hover)
@@ -390,20 +382,29 @@ export function createSidebar(
         anchors.current.delete(JSON.stringify(target))
     }
     const rename = async (target: Pin, title: string): Promise<void> => {
-      if (target.kind === 'workspace') {
-        await workspaces.rename(target.id, title)
+      const key = JSON.stringify(target)
+      if (pendingRenames.current.has(key))
+        throw new Error('此名称正在保存，请稍后重试')
+      pendingRenames.current.add(key)
+      try {
+        if (target.kind === 'workspace') {
+          await workspaces.rename(target.id, title)
+        }
+        else {
+          const binding = sessions.binding(target.id)
+          if (!binding)
+            throw new Error('会话暂不可用，请重新打开后重试')
+          const result = await binding.session.rename(title)
+          if (!result.ok)
+            throw new Error(result.error?.message ?? '重命名失败')
+        }
       }
-      else {
-        const binding = sessions.binding(target.id)
-        if (!binding)
-          throw new Error('会话暂不可用，请重新打开后重试')
-        const result = await binding.session.rename(title)
-        if (!result.ok)
-          throw new Error(result.error?.message ?? '重命名失败')
+      finally {
+        pendingRenames.current.delete(key)
       }
     }
     const begin = (next: Dialog): void => {
-      if (busyRef.current || infoEditingRef.current || groupDraft)
+      if (busyRef.current || groupDraft)
         return
       stopInfoTimer()
       setInfo(null)
@@ -775,7 +776,6 @@ export function createSidebar(
             'disabled': busy,
             'aria-current':
               sessionState.current === session.id ? 'page' : undefined,
-            'title': `${session.displayTitle} · ${status.label}`,
             'onPointerEnter': (event: PointerEvent) => {
               if (event.pointerType === 'mouse' && item && item.kind !== 'chat')
                 showInfo({ kind: 'session', id: session.id }, false, true)
@@ -897,7 +897,6 @@ export function createSidebar(
               'disabled': busy,
               'aria-expanded': open,
               'aria-current': item.workspaceId === draftWorkspaceId ? 'location' : undefined,
-              'title': item.title,
               'onPointerEnter': (event: PointerEvent) => {
                 if (event.pointerType === 'mouse')
                   showInfo({ kind: 'workspace', id: item.workspaceId }, false, true)
@@ -1482,7 +1481,7 @@ export function createSidebar(
       const title = session?.displayTitle ?? item!.title
       const dismiss = (): void => {
         stopInfoTimer()
-        setInfo(null)
+        setInfo(current => current === info ? null : current)
       }
       const row = session && (item ? buckets.rows.get(item.workspaceId) : buckets.misc)?.find(row => row.id === session.id)
       const status = session ? sessionStatus(row ?? session) : undefined
@@ -1491,6 +1490,7 @@ export function createSidebar(
         {
           key: `${JSON.stringify(target)}:${info.edit}:${info.focus}`,
           title,
+          icon: session ? 'message' : item!.kind === 'space' ? 'layers' : 'folder',
           variant: session ? 'session' : 'workspace',
           label: target.kind === 'workspace' ? '工作区信息' : '会话信息',
           anchor: info.anchor,
@@ -1498,16 +1498,19 @@ export function createSidebar(
           focus: info.focus,
           onClose: dismiss,
           onRename: (title: string) => rename(target, title),
-          onEditingChange: (editing: boolean) => {
-            infoEditingRef.current = editing
-            if (editing) {
-              stopInfoTimer()
-              mode.setBlocked(true)
-            }
-            setInfoEditing(editing)
-          },
+          onDetachedError: (cause: unknown) => setError(message(cause)),
           onEnter: stopInfoTimer,
-          onLeave: leaveInfo,
+          action: !session || info.focus || info.edit
+            ? e(IconButton, {
+                icon: isPinned(target) ? 'unpin' : 'pin',
+                label: isPinned(target) ? '取消置顶' : '置顶',
+                disabled: busy,
+                onClick: () => {
+                  dismiss()
+                  pinAction(target).run()
+                },
+              })
+            : null,
         },
         session
           ? e(
@@ -1521,7 +1524,7 @@ export function createSidebar(
                 ? e('div', { className: 'dsh-space-detail-status' }, e(StateDot, { state: 'ongoing' }), `${row.runningSubagentCount} 个子代理运行中`)
                 : null,
             )
-          : e('div', { className: 'dsh-space-muted' }, `${kindLabel(item!.kind)} · ${buckets.rows.get(item!.workspaceId)?.length ?? 0} 个会话`),
+          : e('div', { className: 'dsh-space-detail-status' }, e(Icon, { name: 'message' }), `${buckets.rows.get(item!.workspaceId)?.length ?? 0} 个会话`),
         !session && item
           ? e(
               'button',
@@ -1534,7 +1537,7 @@ export function createSidebar(
               },
               e(Icon, { name: 'folder' }),
               e('code', null, item.path),
-              e(Icon, { name: 'open' }),
+              e(Icon, { name: 'external', size: 14 }),
             )
           : null,
         session && item && item.kind !== 'chat'
@@ -1549,8 +1552,8 @@ export function createSidebar(
           ? e(
               'div',
               { className: 'dsh-space-detail-members' },
-              e('div', { className: 'dsh-space-muted' }, `${item.members?.length ?? 0} 个成员`),
-              item.members?.map(member => e(
+              e('div', { className: 'dsh-space-detail-caption' }, '成员目录'),
+              [...(item.members ?? [])].sort((a, b) => Number(b.path === item.primary) - Number(a.path === item.primary)).map(member => e(
                 'button',
                 {
                   'key': member.path,
@@ -1560,14 +1563,14 @@ export function createSidebar(
                   'disabled': busy,
                   'onClick': () => perform(() => workspaces.openPath(member.path)),
                 },
-                e(Icon, { name: 'folder', size: 14 }),
+                e(Icon, { name: 'folder' }),
                 e(
                   'span',
                   { className: 'dsh-space-detail-member-text' },
-                  e('span', null, memberLabel(member), member.path === item.primary ? e('small', { className: 'dsh-space-detail-primary' }, '主要') : null),
+                  member.title ? e('span', null, member.title) : null,
                   e('code', null, member.path),
-                  member.description ? e('small', { className: 'dsh-space-muted' }, member.description) : null,
                 ),
+                e(Icon, { name: 'external', size: 14 }),
               )),
             )
           : null,
@@ -1578,15 +1581,6 @@ export function createSidebar(
               !session && item?.kind === 'space'
                 ? e('button', { type: 'button', className: 'dsh-space-detail-edit', disabled: busy, onClick: () => begin({ type: 'edit-space', item }) }, e(Icon, { name: 'settings', size: 14 }), '编辑成员')
                 : null,
-              e(IconButton, {
-                icon: isPinned(target) ? 'unpin' : 'pin',
-                label: isPinned(target) ? '取消置顶' : '置顶',
-                disabled: busy,
-                onClick: () => {
-                  dismiss()
-                  pinAction(target).run()
-                },
-              }),
               session
                 ? e(IconButton, {
                     icon: 'archive',
@@ -1597,15 +1591,7 @@ export function createSidebar(
                       archive(session)
                     },
                   })
-                : e(IconButton, {
-                    icon: 'chat',
-                    label: '新建会话',
-                    disabled: busy,
-                    onClick: () => {
-                      dismiss()
-                      beginDraft(item!.workspaceId)
-                    },
-                  }),
+                : null,
             )
           : null,
       )
@@ -1752,7 +1738,7 @@ export function createSidebar(
           'className': 'dsh-space-search',
           'type': 'search',
           'value': archiveOpen ? archiveQuery : query,
-          'disabled': infoEditing || !!groupDraft,
+          'disabled': !!groupDraft,
           'placeholder': archiveOpen ? '搜索归档会话' : '搜索会话或工作区',
           'aria-label': archiveOpen ? '搜索归档会话' : '搜索会话或工作区',
           'onChange': (event: { target: HTMLInputElement }) =>

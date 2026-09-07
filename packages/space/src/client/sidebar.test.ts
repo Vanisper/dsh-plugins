@@ -222,13 +222,18 @@ it('仅子代理运行时仍显示进行中，不误判为空闲', async () => {
   expect(document.querySelector('[data-native-state]')?.getAttribute('data-native-state')).toBe('ongoing')
 })
 
-it('侧栏不显示成员摘要，成员路径和主要标记集中在工作区信息', async () => {
-  const { workspaces } = await mount()
+it('成员只在浮层展示，主成员排首位且不重复名称路径或主要标记', async () => {
+  const { workspaces, item } = await mount()
+  await registry({ ...fixture.registry!, items: [{ ...item, primary: '/b', members: [{ path: '/a', mode: 'reference' }, { path: '/b', mode: 'reference', title: '后端' }] }] })
   expect(document.querySelector('.dsh-space-member-summary')).toBeNull()
   await click('查看信息')
   const panel = document.querySelector('.dsh-space-details')!
-  expect(panel.textContent).toContain('2 个成员')
-  expect(panel.textContent).toContain('主要')
+  expect(panel.textContent).toContain('成员目录')
+  expect(panel.textContent).not.toContain('主要')
+  expect(panel.querySelector('[aria-label="新建会话"]')).toBeNull()
+  expect(panel.querySelector('[aria-label="关闭信息"]')).toBeNull()
+  expect(panel.querySelectorAll('.dsh-space-detail-member code')[0]?.textContent).toBe('/b')
+  expect(panel.querySelectorAll('.dsh-space-detail-member-text>span')).toHaveLength(1)
   expect(panel.querySelectorAll('.dsh-space-detail-member')).toHaveLength(2)
   await click('打开成员目录 /a')
   expect(workspaces.openPath).toHaveBeenCalledWith('/a')
@@ -505,7 +510,7 @@ describe('侧栏交互', () => {
     expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
   })
 
-  it('工作区悬停延迟打开浮层，指针移入浮层后不会被离开计时器关闭', async () => {
+  it('工作区悬停延迟打开浮层，移入可操作，离开即时关闭', async () => {
     vi.useFakeTimers()
     await mount()
     const pointer = (type: string, target: Element): void => {
@@ -525,8 +530,63 @@ describe('侧栏交互', () => {
     await act(async () => vi.advanceTimersByTimeAsync(300))
     expect(document.querySelector('.dsh-space-details')).toBe(panel)
     await act(async () => pointer('pointerout', panel))
-    await act(async () => vi.advanceTimersByTimeAsync(300))
     expect(document.querySelector('.dsh-space-details')).toBeNull()
+  })
+
+  it('改名时类型图标属于编辑区，点击其他操作则取消草稿且执行该操作', async () => {
+    const { workspaces, mode } = await mount()
+    await click('查看信息')
+    await click('演示空间')
+    await input('名称', '未提交')
+    const editor = document.querySelector<HTMLInputElement>('[aria-label="名称"]')!
+    await act(async () => {
+      document.querySelector<HTMLElement>('.dsh-space-detail-type')!.click()
+    })
+    expect(document.querySelector('[aria-label="名称"]')).toBe(editor)
+    expect(editor.value).toBe('未提交')
+    expect(mode.getSnapshot().blocked).toBe(false)
+    await act(async () => document.querySelector<HTMLButtonElement>('.dsh-space-detail-path')!.click())
+    expect(workspaces.openPath).toHaveBeenCalledWith('/workspace')
+    expect(workspaces.rename).not.toHaveBeenCalled()
+    expect(document.querySelector('.dsh-space-details')).toBeNull()
+  })
+
+  it('改名时点击空白区或离开面板即时关闭，不隐式保存', async () => {
+    const { workspaces } = await mount()
+    for (const type of ['click', 'pointerout']) {
+      await click('查看信息')
+      await click('演示空间')
+      await input('名称', '未提交')
+      await act(async () => {
+        const event = new MouseEvent(type, { bubbles: true })
+        Object.defineProperty(event, 'pointerType', { value: 'mouse' })
+        document.querySelector('.dsh-space-details-body')!.dispatchEvent(event)
+      })
+      expect(document.querySelector('.dsh-space-details')).toBeNull()
+    }
+    expect(workspaces.rename).not.toHaveBeenCalled()
+  })
+
+  it('关闭后的改名请求防重入，失败反馈在侧栏且不关闭新浮层', async () => {
+    const { workspaces } = await mount()
+    let reject!: (error: Error) => void
+    vi.mocked(workspaces.rename).mockImplementationOnce(() => new Promise((_, fail) => {
+      reject = fail
+    }))
+    await click('查看信息')
+    await click('演示空间')
+    await input('名称', '正在保存')
+    await click('保存名称')
+    await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })))
+    await click('查看信息')
+    await click('演示空间')
+    await input('名称', '第二次')
+    await click('保存名称')
+    expect(workspaces.rename).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('.dsh-space-details [role="alert"]')?.textContent).toContain('正在保存')
+    await act(async () => reject(new Error('后台保存失败')))
+    expect(document.querySelector('.dsh-space-list')?.parentElement?.textContent).toContain('后台保存失败')
+    expect(document.querySelector<HTMLInputElement>('[aria-label="名称"]')?.value).toBe('第二次')
   })
 
   it('触屏和独立对话不因指针进入弹出项目浮层', async () => {
@@ -545,24 +605,24 @@ describe('侧栏交互', () => {
     expect(document.querySelector('.dsh-space-details')).toBeNull()
   })
 
-  it('工作区信息展示完整路径，原位改名失败保留草稿并阻止切换模式', async () => {
+  it('工作区改名失败保留草稿，不锁定模式或其他操作', async () => {
     const { mode, workspaces } = await mount()
     await click('查看信息')
     expect(document.querySelector('[aria-label="工作区信息"]')?.textContent).toContain('/workspace')
     await click('演示空间')
     await input('名称', '改名后的空间')
-    expect(mode.getSnapshot().blocked).toBe(true)
+    expect(mode.getSnapshot().blocked).toBe(false)
     vi.mocked(workspaces.rename).mockRejectedValueOnce(new Error('离线'))
     await click('保存名称')
     expect(document.querySelector('[role="alert"]')?.textContent).toBe('离线')
     expect(document.querySelector<HTMLInputElement>('[aria-label="名称"]')?.value).toBe('改名后的空间')
-    await click('取消改名')
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(mode.getSnapshot().blocked).toBe(false)
     expect(document.querySelector('[aria-label="名称"]')).toBeNull()
     expect(workspaces.rename).toHaveBeenCalledWith('w', '改名后的空间')
   })
 
-  it('会话改名通过官方 binding，重复保存只提交一次且成功后释放草稿锁', async () => {
+  it('会话改名通过官方 binding，重复保存只提交一次且不锁定其他操作', async () => {
     const { sessions, mode } = await mount()
     const rename = vi.fn()
     let finish!: (value: { ok: boolean }) => void
@@ -581,23 +641,22 @@ describe('侧栏交互', () => {
       button('保存名称').click()
     })
     expect(rename).toHaveBeenCalledTimes(1)
-    expect(button('取消改名').disabled).toBe(true)
-    expect(mode.getSnapshot().blocked).toBe(true)
+    expect(button('保存名称').disabled).toBe(true)
+    expect(button('查看已归档').disabled).toBe(false)
+    expect(mode.getSnapshot().blocked).toBe(false)
     await act(async () => finish({ ok: true }))
     expect(mode.getSnapshot().blocked).toBe(false)
     expect(document.querySelector('[aria-label="名称"]')).toBeNull()
   })
 
-  it('escape 先取消编辑，再关闭信息并恢复焦点', async () => {
+  it('escape 取消未提交改名并关闭信息，恢复行焦点', async () => {
     const { workspaces, mode } = await mount()
     await click('查看信息')
     await click('演示空间')
     await input('名称', '未保存')
     await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(document.querySelector('[aria-label="名称"]')).toBeNull()
-    expect(document.querySelector('[aria-label="工作区信息"]')).not.toBeNull()
     expect(mode.getSnapshot().blocked).toBe(false)
-    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(document.querySelector('[aria-label="工作区信息"]')).toBeNull()
     expect(document.activeElement?.className).toBe('dsh-space-heading')
     expect(workspaces.rename).not.toHaveBeenCalled()
@@ -613,15 +672,13 @@ describe('侧栏交互', () => {
     expect(document.querySelector('[aria-label="名称"]')).not.toBeNull()
   })
 
-  it('宿主收起侧栏时保留原位编辑草稿，取消后释放锁', async () => {
+  it('宿主收起侧栏时取消原位编辑，不留存脱离锚点的浮层', async () => {
     const { setWide, mode } = await mount()
     await click('查看信息')
     await click('演示空间')
     await input('名称', '保留草稿')
     await setWide(false)
-    expect(document.querySelector<HTMLInputElement>('[aria-label="名称"]')?.value).toBe('保留草稿')
-    expect(mode.getSnapshot().blocked).toBe(true)
-    await click('取消改名')
+    expect(document.querySelector('[aria-label="名称"]')).toBeNull()
     expect(mode.getSnapshot().blocked).toBe(false)
     expect(document.querySelector('.dsh-space-details')).toBeNull()
   })

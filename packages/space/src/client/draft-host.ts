@@ -5,6 +5,7 @@ import type { HostWorkspacePickerProps } from './target-picker.ts'
 import type { ConversationService, ReactLike, SessionService, SlotsService, WorkspaceService } from './types.ts'
 import { runOperation } from './api.ts'
 import { createControls } from './controls.ts'
+import { createDraftMenu } from './draft-menu.ts'
 import { createDraftOptions } from './draft-options.ts'
 import { createDraftSession } from './draft-session.ts'
 import { createNativeComposer, extendNativeEntry, extendNewSession, pauseInitialSelection, selectSnapshot, useNativeSnapshot } from './native-compat.ts'
@@ -42,6 +43,7 @@ export function createDraftComposer(
   const { Shell, Root } = createNativeComposer(require)
   const options = createDraftOptions()
   const { IconButton } = createControls(React)
+  const DraftMenu = createDraftMenu(React)
   let adopting: string | undefined
   let transferredImages: readonly string[] = []
   let disposed = false
@@ -213,8 +215,14 @@ export function createDraftComposer(
             const settings = React.useSyncExternalStore(options.subscribe, options.getSnapshot)
             React.useSyncExternalStore(draft.subscribe, draft.getSnapshot)
             const fileInput = React.useRef<HTMLInputElement | null>(null)
+            const [menuOpen, setMenuOpen] = React.useState(false)
             const isDraft = props.sessionId === undefined
             const busy = input.snapshot.phase === 'submitting' || input.snapshot.phase === 'adjudicating'
+            const showMenu = isDraft && !busy && menuOpen
+            React.useEffect(() => {
+              if (!isDraft || busy)
+                setMenuOpen(false)
+            }, [isDraft, busy])
             const addImages = (files: readonly File[]): string | null => {
               try {
                 const images = conversation.createDraftImages(files)
@@ -245,7 +253,7 @@ export function createDraftComposer(
               useInput: selectSnapshot(isDraft ? localInput : originalInput),
               useNotices: selectSnapshot(isDraft ? localNotices : originalNotices),
               useLexicon: selectSnapshot(isDraft ? localLexicon : originalLexicon),
-              useMenuLauncher: selectSnapshot(isDraft ? null : originalMenu),
+              useMenuLauncher: selectSnapshot(isDraft ? showMenu ? 'command' : null : originalMenu),
               ...(!isDraft && adopting === props.sessionId ? { disabled: true, blocked: { reason: '正在应用新会话选项…' } } : {}),
               ...(isDraft
                 ? {
@@ -253,8 +261,8 @@ export function createDraftComposer(
                     keyboard: input,
                     disabled: busy,
                     placeholder: '有什么需要一起完成？',
-                    t: (key: string, ...args: unknown[]) => key === 'input.commands' ? '添加图片' : props.t(key, ...args),
-                    toggleCommandMenu: () => fileInput.current?.click(),
+                    toggleCommandMenu: () => setMenuOpen(open => !open),
+                    overlay: e(DraftMenu, { open: showMenu, onClose: () => setMenuOpen(false), onAddImages: () => fileInput.current?.click() }),
                     command: options.command,
                     useProjection: (key: string, selector?: (value: unknown) => unknown) => {
                       const original = props.useProjection(key, selector)

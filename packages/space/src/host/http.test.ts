@@ -62,5 +62,7 @@ describe('parseOperation', () => {
     expect(() => parseOperation({ op: 'create-space', name: 'demo', members: [{ path: '/a', extra: 1 }] })).toThrow('未知字段')
     expect(() => parseOperation({ op: 'create-space', name: 'demo', members: 'a' })).toThrow('members')
     expect(parseOperation({ op: 'create-space', name: 'demo', members: [{ path: '/a' }], primary: '/a' })).toMatchObject({ members: [{ path: '/a' }], primary: '/a' })
+    expect(parseOperation({ op: 'enhance-space', workspace: 'w', members: [{ path: '/a' }], primary: '/a' })).toMatchObject({ members: [{ path: '/a' }], primary: '/a' })
+    expect(() => parseOperation({ op: 'enhance-space', workspace: 'w', members: [{ path: '/a', mode: 'invalid' }] })).toThrow('mode')
   })
 })

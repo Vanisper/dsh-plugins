@@ -32,11 +32,11 @@ import {
   Search,
   Settings2,
   SquarePen,
-  Star,
   Target,
   Trash2,
   X,
 } from 'lucide'
+import { createImeGuard } from './ime.ts'
 
 const icons = {
   plan: Lightbulb,
@@ -72,7 +72,6 @@ const icons = {
   chat: SquarePen,
   message: MessageCircle,
   external: ArrowUpRight,
-  star: Star,
   remove: Trash2,
   close: X,
 }
@@ -116,6 +115,7 @@ interface ModalProps {
   fieldsDisabled?: boolean
   cancelLabel?: string
   danger?: boolean
+  secondary?: unknown
 }
 interface Controls {
   Icon: (props: IconProps) => unknown
@@ -308,8 +308,10 @@ export function createControls(React: ReactLike): Controls {
     fieldsDisabled,
     cancelLabel,
     danger,
+    secondary,
   }: ModalProps): unknown {
     const dialog = React.useRef<HTMLDialogElement | null>(null)
+    const ime = React.useMemo(createImeGuard, [])
     React.useEffect(() => {
       const previous = document.activeElement as HTMLElement | null
       const element = dialog.current!
@@ -332,7 +334,7 @@ export function createControls(React: ReactLike): Controls {
         'aria-busy': busy,
         'onCancel': (event: Event) => {
           event.preventDefault()
-          if (!busy)
+          if (!busy && !ime.active())
             onClose()
         },
       },
@@ -340,9 +342,15 @@ export function createControls(React: ReactLike): Controls {
         'form',
         {
           className: 'dsh-space-form',
+          onCompositionStart: ime.start,
+          onCompositionEnd: ime.end,
+          onKeyDown: (event: { key: string, nativeEvent: KeyboardEvent, preventDefault: () => void }) => {
+            if (event.key === 'Enter' && ime.active(event.nativeEvent))
+              event.preventDefault()
+          },
           onSubmit: (event: Event) => {
             event.preventDefault()
-            if (!busy && !submitDisabled)
+            if (!busy && !submitDisabled && !ime.active())
               onSubmit?.()
           },
         },
@@ -376,6 +384,7 @@ export function createControls(React: ReactLike): Controls {
         e(
           'footer',
           { className: 'dsh-space-buttons' },
+          secondary ? e('div', { className: 'dsh-space-dialog-secondary' }, secondary) : null,
           e(
             'button',
             {

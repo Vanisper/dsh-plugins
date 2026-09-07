@@ -1,5 +1,6 @@
 import type { MemberItem, ReactLike } from './types.ts'
 import { createControls } from './controls.ts'
+import { createImeGuard } from './ime.ts'
 
 export interface MemberDraft {
   members: MemberItem[]
@@ -30,6 +31,7 @@ export function createMemberEditor(
   }): unknown {
     const [path, setPath] = React.useState('')
     const [error, setError] = React.useState('')
+    const ime = React.useMemo(createImeGuard, [])
     const list = React.useRef<HTMLDivElement | null>(null)
     const positions = React.useRef(new Map<string, number>())
     const members = [...draft.members].sort(
@@ -126,16 +128,17 @@ export function createMemberEditor(
                 ),
                 e('small', { title: member.path }, member.path),
               ),
-              e(IconButton, {
-                icon: 'star',
-                label:
+              e('input', {
+                'type': 'radio',
+                'name': 'space-primary-member',
+                'className': 'dsh-space-member-primary',
+                'aria-label':
                   member.path === draft.primary
                     ? '当前主成员'
                     : `将 ${memberLabel(member)} 设为主要`,
-                className:
-                  member.path === draft.primary ? 'dsh-space-primary' : '',
-                disabled: member.path === draft.primary,
-                onClick: () => setDraft({ ...draft, primary: member.path }),
+                'title': member.path === draft.primary ? '当前主成员' : '设为主要',
+                'checked': member.path === draft.primary,
+                'onChange': () => setDraft({ ...draft, primary: member.path }),
               }),
               e(IconButton, {
                 icon: 'close',
@@ -162,11 +165,6 @@ export function createMemberEditor(
                 'div',
                 { className: 'dsh-space-member-fields' },
                 e(
-                  'div',
-                  { className: 'full dsh-space-muted' },
-                  e('code', null, member.path),
-                ),
-                e(
                   'label',
                   null,
                   '显示名称',
@@ -182,39 +180,37 @@ export function createMemberEditor(
                   'label',
                   null,
                   '接入方式',
-                  e(
-                    'select',
-                    {
-                      value: member.mode,
-                      disabled: original.some(
-                        row => row.path === member.path,
+                  original.some(row => row.path === member.path)
+                    ? e('output', null, member.mode === 'reference' ? '引用' : '符号链接')
+                    : e(
+                        'select',
+                        {
+                          value: member.mode,
+                          onChange: (event: { target: HTMLSelectElement }) =>
+                            patch(member, {
+                              mode: event.target.value as MemberItem['mode'],
+                              linkName: undefined,
+                            }),
+                        },
+                        e('option', { value: 'reference' }, '引用'),
+                        e('option', { value: 'link' }, '符号链接'),
                       ),
-                      onChange: (event: { target: HTMLSelectElement }) =>
-                        patch(member, {
-                          mode: event.target.value as MemberItem['mode'],
-                          linkName: undefined,
-                        }),
-                    },
-                    e('option', { value: 'reference' }, '引用'),
-                    e('option', { value: 'link' }, '符号链接'),
-                  ),
                 ),
                 member.mode === 'link'
                   ? e(
                       'label',
                       { className: 'full' },
                       '链接名称',
-                      e('input', {
-                        value: member.linkName ?? '',
-                        disabled: original.some(
-                          row => row.path === member.path,
-                        ),
-                        placeholder: '默认使用目录名称',
-                        onChange: (event: { target: HTMLInputElement }) =>
-                          patch(member, {
-                            linkName: event.target.value || undefined,
+                      original.some(row => row.path === member.path)
+                        ? e('output', null, member.linkName)
+                        : e('input', {
+                            value: member.linkName ?? '',
+                            placeholder: '默认使用目录名称',
+                            onChange: (event: { target: HTMLInputElement }) =>
+                              patch(member, {
+                                linkName: event.target.value || undefined,
+                              }),
                           }),
-                      }),
                     )
                   : null,
                 e(
@@ -236,33 +232,37 @@ export function createMemberEditor(
         ? e('p', { className: 'dsh-space-muted' }, '尚无成员目录')
         : null,
       e(
+        'button',
+        { type: 'button', className: 'dsh-space-add-member', onClick: () => onPick(add) },
+        e(Icon, { name: 'folderPlus' }),
+        '添加成员目录',
+      ),
+      e('details', { className: 'dsh-space-member-manual' }, e('summary', null, '输入目录路径'), e(
         'div',
         { className: 'dsh-space-path-field' },
         e('input', {
           'aria-label': '成员目录路径',
           'value': path,
           'placeholder': '目录完整路径',
+          'onCompositionStart': ime.start,
+          'onCompositionEnd': ime.end,
           'onChange': (event: { target: HTMLInputElement }) =>
             setPath(event.target.value),
-          'onKeyDown': (event: KeyboardEvent) => {
+          'onKeyDown': (event: { key: string, nativeEvent: KeyboardEvent, preventDefault: () => void }) => {
             if (event.key === 'Enter') {
               event.preventDefault()
-              add(path)
+              if (!ime.active(event.nativeEvent))
+                add(path)
             }
           },
         }),
         e(IconButton, {
-          icon: 'folderPlus',
-          label: '选择成员目录',
-          onClick: () => onPick(add),
-        }),
-        e(IconButton, {
           icon: 'plus',
-          label: '添加成员目录',
+          label: '添加路径',
           disabled: !path.trim(),
           onClick: () => add(path),
         }),
-      ),
+      )),
       error
         ? e(
             'div',

@@ -14,6 +14,7 @@ import type {
   SlotProps,
   WorkspaceService,
 } from './types.ts'
+import type { WorkspaceEdit } from './workspace-edit.ts'
 import { fetchRegistry, runOperation } from './api.ts'
 import { createArchiveView } from './archive-view.ts'
 import { createControls } from './controls.ts'
@@ -31,6 +32,7 @@ import {
 import { observeRegistry } from './registry.ts'
 import { archivedEntries, projectGroups, sortWorkspaces } from './views.ts'
 import { waitFor } from './wait.ts'
+import { createWorkspaceEdit } from './workspace-edit.ts'
 
 type Dialog
   = | { type: 'create-space' }
@@ -40,7 +42,7 @@ type Dialog
     | { type: 'rename-workspace', item: RegistryItem }
     | { type: 'delete-workspace', item: RegistryItem }
     | { type: 'drop-description', item: RegistryItem }
-    | { type: 'edit-space', item: RegistryItem }
+    | { type: 'edit-workspace', item: RegistryItem }
     | { type: 'chat-directories' }
     | { type: 'assign-group', session: SessionRow }
     | { type: 'delete-group', group: DisplayGroup }
@@ -143,6 +145,9 @@ export function createSidebar(
     const [dialog, setDialog] = React.useState<Dialog | null>(null)
     const [text, setText] = React.useState('')
     const [members, setMembers] = React.useState<MemberDraft>({ members: [] })
+    const [enhance, setEnhance] = React.useState(false)
+    const workspaceEdit = React.useRef<WorkspaceEdit | undefined>(undefined)
+    const workspaceEditKey = React.useRef(0)
     const [operationBusy, setBusy] = React.useState(false)
     const [info, setInfo] = React.useState<InfoState | null>(null)
     const pendingRenames = React.useRef(new Set<string>())
@@ -356,9 +361,6 @@ export function createSidebar(
 
     const refresh = (): void => setRegistryRevision(value => value + 1)
     const stopInfoTimer = (): void => clearTimeout(infoTimer.current)
-    const leaveInfo = (): void => {
-      stopInfoTimer()
-    }
     const showInfo = (target: Pin, edit = false, hover = false): void => {
       stopInfoTimer()
       if (busyRef.current || dialog || groupDraft || archiveConfirmation)
@@ -403,6 +405,22 @@ export function createSidebar(
         pendingRenames.current.delete(key)
       }
     }
+    const loadWorkspaceEditor = (item: RegistryItem): void => {
+      workspaceEditKey.current++
+      setText(item.title)
+      setMembers({ members: structuredClone(item.members ?? []), primary: item.primary })
+      setEnhance(item.kind === 'space')
+      workspaceEdit.current = createWorkspaceEdit(item, {
+        read: fetchRegistry,
+        run: runOperation,
+        rename: (id, title) => rename({ kind: 'workspace', id }, title),
+        accepted: (current) => {
+          setMembers({ members: structuredClone(current.members ?? []), primary: current.primary })
+          setEnhance(current.kind === 'space')
+          refresh()
+        },
+      })
+    }
     const begin = (next: Dialog): void => {
       if (busyRef.current || groupDraft)
         return
@@ -418,14 +436,10 @@ export function createSidebar(
             ? layout.assignments[next.session.id] ?? ''
             : '',
       )
-      setMembers(
-        next.type === 'edit-space'
-          ? {
-              members: structuredClone(next.item.members ?? []),
-              primary: next.item.primary,
-            }
-          : { members: [] },
-      )
+      setMembers({ members: [] })
+      workspaceEdit.current = undefined
+      if (next.type === 'edit-workspace')
+        loadWorkspaceEditor(next.item)
       mode.setBlocked(true)
       setDialog(next)
     }
@@ -701,12 +715,12 @@ export function createSidebar(
             },
           ]
         : []),
-      ...(item.kind === 'space'
+      ...(item.kind !== 'chat'
         ? [
             {
-              label: '编辑成员',
+              label: '编辑工作区',
               icon: 'settings' as const,
-              run: () => begin({ type: 'edit-space', item }),
+              run: () => begin({ type: 'edit-workspace', item }),
             },
           ]
         : []),
@@ -765,7 +779,7 @@ export function createSidebar(
           },
           'key': session.id,
           'onContextMenu': openContextMenu,
-          'onPointerLeave': leaveInfo,
+          'onPointerLeave': stopInfoTimer,
         },
         e(
           'button',
@@ -887,7 +901,7 @@ export function createSidebar(
         },
         e(
           'div',
-          { className: `dsh-space-head${item.workspaceId === draftWorkspaceId ? ' current' : ''}`, onContextMenu: openContextMenu, onPointerLeave: leaveInfo },
+          { className: `dsh-space-head${item.workspaceId === draftWorkspaceId ? ' current' : ''}`, onContextMenu: openContextMenu, onPointerLeave: stopInfoTimer },
           e(
             'button',
             {
@@ -1260,44 +1274,47 @@ export function createSidebar(
           input('名称'),
         )
       }
-      if (dialog.type === 'edit-space') {
-        const item = dialog.item
-        const latest = items.find(
-          row => row.workspaceId === item.workspaceId,
-        )
-        const stale = latest?.revision !== item.revision
+      if (dialog.type === 'edit-workspace') {
+        const editor = workspaceEdit.current!
+        const { item, saved } = editor.snapshot()
         return e(
           Modal,
           {
             ...props,
-            title: `编辑成员 · ${item.title}`,
-            submitDisabled: !item.revision,
+            title: '编辑工作区',
+            submitDisabled: !text.trim() || !registry,
+            cancelLabel: saved ? '关闭' : '取消',
+            secondary: e('button', {
+              type: 'button',
+              className: 'dsh-space-button danger',
+              disabled: busy || !registry,
+              onClick: () => begin({ type: 'delete-workspace', item }),
+            }, '移除工作区'),
             onSubmit: () =>
               perform(
                 async () => {
-                  await runOperation({
-                    op: 'save-members',
-                    workspace: item.workspaceId,
-                    ...members,
-                    expectedRevision: item.revision,
-                  })
+                  await editor.save({ title: text, space: enhance, ...members })
                   refresh()
                 },
                 () => {
                   setDialog(null)
-                  setNotice('成员已保存')
+                  setNotice('工作区已保存')
                 },
               ),
           },
-          e('small', { className: 'dsh-space-muted' }, item.path),
-          stale
+          e('label', null, '工作区名称', e('div', { className: 'dsh-space-workspace-name' }, e(Icon, { name: enhance ? 'layers' : 'folder' }), e('input', {
+            'aria-label': '工作区名称',
+            'value': text,
+            'onChange': (event: { target: HTMLInputElement }) => setText(event.target.value),
+          }))),
+          e('div', { className: 'dsh-space-workspace-path' }, e('span', null, '工作目录'), e('code', null, item.path)),
+          error
             ? e(
                 'div',
                 {
                   className: 'dsh-space-notice dsh-space-error',
                   role: 'status',
                 },
-                '描述已变更或暂不可用。',
                 e(
                   'button',
                   {
@@ -1309,33 +1326,27 @@ export function createSidebar(
                         const fresh = result.items.find(
                           row =>
                             row.workspaceId === item.workspaceId
-                            && row.kind === 'space',
+                            && row.kind !== 'chat',
                         )
                         if (!fresh)
-                          throw new Error('该空间描述已不存在，当前草稿未保存')
+                          throw new Error('工作区已不存在，无法重新载入')
                         setRegistry(result)
-                        setDialog({ type: 'edit-space', item: fresh })
-                        setMembers({
-                          members: structuredClone(fresh.members ?? []),
-                          primary: fresh.primary,
-                        })
+                        loadWorkspaceEditor(fresh)
+                        setDialog({ type: 'edit-workspace', item: fresh })
                       }),
                   },
-                  '放弃草稿并重新载入',
+                  '放弃未保存修改并重新载入',
                 ),
               )
             : null,
-          e(MemberEditor, {
-            onPick,
-            draft: members,
-            setDraft: setMembers,
-            original: item.members,
-          }),
-          e(
-            'small',
-            { className: 'dsh-space-muted' },
-            '主成员只影响组织展示，不改变会话的工作目录。',
-          ),
+          item.kind === 'plain'
+            ? e('label', { className: 'dsh-space-enhance' }, e('input', { type: 'checkbox', checked: enhance, onChange: (event: { target: HTMLInputElement }) => {
+                setEnhance(event.target.checked)
+                if (!event.target.checked)
+                  setMembers({ members: [] })
+              } }), '增强为空间')
+            : null,
+          enhance ? e(MemberEditor, { key: workspaceEditKey.current, onPick, draft: members, setDraft: setMembers, original: item.members }) : null,
         )
       }
       if (dialog.type === 'invalid') {
@@ -1578,8 +1589,8 @@ export function createSidebar(
           ? e(
               'div',
               { className: 'dsh-space-details-actions' },
-              !session && item?.kind === 'space'
-                ? e('button', { type: 'button', className: 'dsh-space-detail-edit', disabled: busy, onClick: () => begin({ type: 'edit-space', item }) }, e(Icon, { name: 'settings', size: 14 }), '编辑成员')
+              !session && item
+                ? e('button', { type: 'button', className: 'dsh-space-detail-edit', disabled: busy, onClick: () => begin({ type: 'edit-workspace', item }) }, e(Icon, { name: 'settings' }), '编辑工作区')
                 : null,
               session
                 ? e(IconButton, {

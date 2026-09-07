@@ -86,6 +86,33 @@ async function exists(path: string): Promise<boolean> {
 }
 
 describe('create space', () => {
+  it('增强普通工作区时整份校验成员，失败不留下空空间描述', async () => {
+    const root = await temporaryRoot()
+    const workspaces = fakeWorkspaces([{ workspaceId: 'w', title: '普通项目', path: root, sessionIds: ['s'] }])
+    const store = fakeStore(root)
+    const operations = createSpaceOperations(store, workspaces)
+    await expect(operations.execute({ op: 'enhance-space', workspace: 'w', members: [{ path: join(root, 'missing') }] })).rejects.toThrow('目录不存在')
+    expect(store.value.spaces).toEqual([])
+    expect(workspaces.rows).toEqual([{ workspaceId: 'w', title: '普通项目', path: root, sessionIds: ['s'] }])
+  })
+
+  it('增强与首批成员一次写入，设置失败回滚本次新建链接', async () => {
+    const root = await temporaryRoot()
+    const source = await temporaryRoot()
+    const workspaces = fakeWorkspaces([{ workspaceId: 'w', title: '普通项目', path: root, sessionIds: ['s'] }])
+    const store = fakeStore(root)
+    const operations = createSpaceOperations(store, workspaces)
+    const operation = { op: 'enhance-space' as const, workspace: 'w', members: [{ path: source, mode: 'link' as const, linkName: 'source' }] }
+    store.failNextReplace = true
+    await expect(operations.execute(operation)).rejects.toThrow('settings write failed')
+    expect(store.value.spaces).toEqual([])
+    expect(await exists(join(root, 'projects', 'source'))).toBe(false)
+    await operations.execute(operation)
+    expect(store.value.spaces[0]?.members).toHaveLength(1)
+    expect(await canonicalize(join(root, 'projects', 'source'))).toBe(await canonicalize(source))
+    expect(workspaces.rows[0]?.sessionIds).toEqual(['s'])
+  })
+
   it('独立对话创建响应丢失后按请求标识重试，不重复注册目录', async () => {
     const root = await temporaryRoot()
     const store = fakeStore(root)

@@ -17,7 +17,7 @@ import { validateCreationId } from './validation.ts'
 export type SpaceOperation
   = { op: 'create-space', name: string, folder?: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string, members?: MemberInput[], primary?: string }
     | { op: 'save-members', workspace: string, members: MemberInput[], primary?: string, expectedRevision: string }
-    | { op: 'enhance-space', workspace: string }
+    | { op: 'enhance-space', workspace: string, members?: MemberInput[], primary?: string }
     | { op: 'attach', workspace: string, target: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string }
     | { op: 'detach', workspace: string, target: string }
     | { op: 'primary', workspace: string, target: string }
@@ -141,7 +141,7 @@ class SpaceOperationsImpl implements SpaceOperations {
     switch (operation.op) {
       case 'create-space': return this.createSpace(current, operation)
       case 'save-members': return this.saveMembers(current, operation)
-      case 'enhance-space': return this.enhanceSpace(current, operation.workspace)
+      case 'enhance-space': return this.enhanceSpace(current, operation)
       case 'attach': return this.attach(current, operation)
       case 'detach': return this.detach(current, operation)
       case 'primary': return this.primary(current, operation)
@@ -250,12 +250,25 @@ class SpaceOperationsImpl implements SpaceOperations {
     return { space: this.spaceView(core, next) }
   }
 
-  private async enhanceSpace(current: SpaceSettings, reference: string): Promise<Record<string, unknown>> {
-    const core = coreMatch(this.workspaces.list(), reference)
+  private async enhanceSpace(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'enhance-space' }>): Promise<Record<string, unknown>> {
+    const core = coreMatch(this.workspaces.list(), operation.workspace)
     if (current.spaces.some(space => space.workspaceId === core.workspaceId) || current.chats.some(chat => chat.workspaceId === core.workspaceId))
       throw new Error(`核心工作区「${core.title}」已经有插件描述`)
-    const space: SpaceData = { workspaceId: core.workspaceId, members: [] }
-    await this.save({ ...clone(current), spaces: [...current.spaces, space] })
+    const draft = await prepareMemberDraft(operation.members ?? [], operation.primary)
+    const space: SpaceData = { workspaceId: core.workspaceId, ...draft }
+    const createdLinks: SpaceData['members'] = []
+    try {
+      for (const member of space.members) {
+        if (await ensureMemberLink(core.path, member))
+          createdLinks.push(member)
+      }
+      await this.save({ ...clone(current), spaces: [...current.spaces, space] })
+    }
+    catch (cause) {
+      for (const member of createdLinks)
+        await removeMemberLink(core.path, member).catch(error => this.log(`[dsh-space] 清理未登记成员链接失败：${(error as Error).message}`))
+      throw cause
+    }
     return { space: this.spaceView(core, space), enhanced: true }
   }
 

@@ -71,7 +71,7 @@ export function parseOperation(value: unknown): SpaceOperation {
   switch (op) {
     case 'create-space': return { op, name: requiredString(body, 'name'), folder: optionalString(body.folder, 'folder'), mode: mode(body.mode), linkName: optionalString(body.linkName, 'linkName'), title: optionalString(body.title, 'title'), description: optionalString(body.description, 'description'), ...(body.members !== undefined ? { members: parseMembers(body.members) } : {}), ...(body.primary !== undefined ? { primary: optionalString(body.primary, 'primary') } : {}) }
     case 'save-members': return { op, workspace: requiredString(body, 'workspace'), members: parseMembers(body.members), primary: optionalString(body.primary, 'primary'), expectedRevision: requiredString(body, 'expectedRevision') }
-    case 'enhance-space': return { op, workspace: requiredString(body, 'workspace') }
+    case 'enhance-space': return { op, workspace: requiredString(body, 'workspace'), ...(body.members !== undefined ? { members: parseMembers(body.members) } : {}), ...(body.primary !== undefined ? { primary: optionalString(body.primary, 'primary') } : {}) }
     case 'attach': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), mode: mode(body.mode), linkName: optionalString(body.linkName, 'linkName'), title: optionalString(body.title, 'title'), description: optionalString(body.description, 'description') }
     case 'detach': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target') }
     case 'primary': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target') }

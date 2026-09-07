@@ -89,7 +89,12 @@ export function createDraftCommands(
     return [...state.commands, ...client].map((item) => {
       const supported = item.name === 'model' ? client.includes(item) : ['goal', 'plan', 'permission'].includes(item.name)
       const disabledReason = supported ? undefined : '此命令尚未适配草稿，请在创建会话后使用'
-      return { ...item, disabledReason }
+      const description = item.name === 'plan'
+        ? options.intent === 'plan' ? '退出计划模式' : '开启计划模式'
+        : item.name === 'goal'
+          ? options.intent === 'goal' ? '取消目标模式' : '开启目标模式'
+          : item.description
+      return { ...item, description, disabledReason }
     })
   }
   const available = (name: string): void => {
@@ -109,6 +114,19 @@ export function createDraftCommands(
       items = [{ name: '重试命令目录', description: cause instanceof Error ? cause.message : String(cause) }]
     }
     reduce({ type: 'source-settled', source: 'command', generation: current.generation, items })
+  }
+  let shownIntent = options.intent
+  const unsubscribeOptions = options.subscribe(() => {
+    if (shownIntent === options.intent)
+      return
+    shownIntent = options.intent
+    refresh()
+  })
+  const selectIntent = (name: 'plan' | 'goal', span: TokenSpan): void => {
+    dismiss()
+    if (input.consumeToken({ kind: 'span', span }))
+      options.setIntent(options.intent === name ? 'message' : name)
+    focus()
   }
   const open = (next: TriggerHit, launched: boolean): void => {
     const refreshDirectory = !menu.getSnapshot().open || launched || options.getSnapshot().status === 'loading'
@@ -190,10 +208,7 @@ export function createDraftCommands(
       available(item.name)
       const span = hit.span
       if (item.name === 'goal' || item.name === 'plan') {
-        dismiss()
-        if (input.consumeToken({ kind: 'span', span }))
-          options.setIntent(item.name)
-        focus()
+        selectIntent(item.name, span)
       }
       else {
         openOptions(item.name, { via: 'menu', span })
@@ -224,31 +239,32 @@ export function createDraftCommands(
         await options.load()
         if (!editable() || turn !== lifecycle || intent !== options.intent || snapshot.draftRev !== input.snapshot.draftRev)
           return
-        // 已选目标时，整段正文归目标所有；其中的斜杠不是第二条命令
+        const name = command?.[1]
+        const args = command ? line.slice(command[0].length).trim() : ''
+        if ((name === 'plan' || name === 'goal') && !args) {
+          available(name)
+          selectIntent(name, { start: 0, end: snapshot.draft.length, draftRev: snapshot.draftRev })
+          return
+        }
+        // 裸模式命令是显式操作；其他目标正文不递归解析为命令
         if (intent === 'goal') {
           available('goal')
           draftSubmissionText(snapshot.draft, 'goal')
           originalSubmit(mode)
           return
         }
-        const name = command![1]!
-        const args = line.slice(command![0].length).trim()
-        available(name)
+        available(name!)
         if (name === 'goal') {
-          if (args)
-            draftSubmissionText(args, 'goal')
+          draftSubmissionText(args, 'goal')
           input.setDraft(args)
           options.setIntent('goal')
-          if (args)
-            originalSubmit(mode)
-          else
-            focus()
+          originalSubmit(mode)
           return
         }
         if (name === 'plan') {
-          if (!args || args === 'off') {
+          if (args === 'off') {
             if (input.consumeToken({ kind: 'span', span: { start: 0, end: snapshot.draft.length, draftRev: snapshot.draftRev } }))
-              options.setIntent(args === 'off' ? 'message' : 'plan')
+              options.setIntent('message')
             focus()
           }
           else {
@@ -257,7 +273,7 @@ export function createDraftCommands(
           return
         }
         if (!args) {
-          openOptions(name, { via: 'enter', token: line })
+          openOptions(name!, { via: 'enter', token: line })
           return
         }
         if (name === 'permission' && args === 'danger-full-access') {
@@ -304,7 +320,7 @@ export function createDraftCommands(
     },
     track(text: string, caret: number, guard: TriggerGuard, draftRev: number) {
       const detected = native.detect(text, caret, guard)
-      if (!editable() || options.intent === 'goal' || detected?.trigger !== '/') {
+      if (!editable() || detected?.trigger !== '/') {
         dismiss()
         return
       }
@@ -333,6 +349,7 @@ export function createDraftCommands(
     adjudicate: async () => undefined,
     dispose() {
       disposed = true
+      unsubscribeOptions()
       close()
       popup.dispose()
       if (input.submit === submit)

@@ -6,7 +6,7 @@ import type { ConversationService, ReactLike, SessionService, SlotsService, Work
 import { runOperation } from './api.ts'
 import { createControls } from './controls.ts'
 import { createDraftCommands } from './draft-commands.ts'
-import { createDraftIntentChip } from './draft-intent-chip.ts'
+import { createDraftIntentChip, draftPlaceholders } from './draft-intent-chip.ts'
 import { draftSubmissionText } from './draft-intent.ts'
 import { createDraftOptions } from './draft-options.ts'
 import { createDraftSession } from './draft-session.ts'
@@ -264,7 +264,7 @@ export function createDraftComposer(
                     inputActions: input.actions,
                     keyboard: input,
                     disabled: busy,
-                    placeholder: '有什么需要一起完成？',
+                    placeholder: draftPlaceholders[options.intent],
                     toggleCommandMenu: commands.toggle,
                     overlay: e('div', {
                       'data-dsh-draft-overlay': true,

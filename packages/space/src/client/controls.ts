@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleX,
   Clock,
   Ellipsis,
   Folder,
@@ -16,6 +17,7 @@ import {
   Hash,
   Info,
   Layers,
+  Lightbulb,
   ListFilter,
   LoaderCircle,
   Maximize2,
@@ -29,11 +31,15 @@ import {
   Settings2,
   SquarePen,
   Star,
+  Target,
   Trash2,
   X,
 } from 'lucide'
 
 const icons = {
+  plan: Lightbulb,
+  goal: Target,
+  cancel: CircleX,
   archive: Archive,
   restore: ArchiveRestore,
   clock: Clock,

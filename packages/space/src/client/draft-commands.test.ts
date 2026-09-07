@@ -75,18 +75,18 @@ describe('无实体原生命令适配', () => {
     expect(h.sink).not.toHaveBeenCalled()
   })
 
-  it('点选 Plan 直接开启并关闭菜单，不弹选项，重复选择不反转状态', async () => {
+  it.each(['plan', 'goal'] as const)('点选 %s 直接开启并关闭菜单，再次选择取消，不弹选项', async (name) => {
     const h = harness()
     h.input.setDraft('keep text')
     h.input.addImages(['image'])
-    await h.pick('plan')
-    expect(h.options.intent).toBe('plan')
+    await h.pick(name)
+    expect(h.options.intent).toBe(name)
     expect(h.commands.menu.getSnapshot().open).toBe(false)
     expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     expect(h.focus).toHaveBeenCalled()
     expect(h.input.snapshot).toMatchObject({ draft: 'keep text', imageIds: ['image'] })
-    await h.pick('plan')
-    expect(h.options.intent).toBe('plan')
+    await h.pick(name)
+    expect(h.options.intent).toBe('message')
     expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     expect(h.input.snapshot).toMatchObject({ draft: 'keep text', imageIds: ['image'] })
     expect(h.sink).not.toHaveBeenCalled()
@@ -150,7 +150,7 @@ describe('无实体原生命令适配', () => {
     const h = harness()
     h.input.setDraft('keep text')
     h.input.addImages(['image'])
-    for (const intent of ['goal', 'plan', 'goal', 'goal'] as const) {
+    for (const intent of ['goal', 'plan', 'goal'] as const) {
       await h.pick(intent)
       expect(h.options.intent).toBe(intent)
       expect(h.commands.popup.state.getSnapshot().open).toBe(false)
@@ -161,7 +161,53 @@ describe('无实体原生命令适配', () => {
     expect(h.sink).not.toHaveBeenCalled()
   })
 
-  it('裸 /goal 只选择意图，含正文的前导 /goal 规范为目标和正文', async () => {
+  it('菜单提示随当前意图更新，只改变模式命令的描述', async () => {
+    const h = harness()
+    h.commands.toggle()
+    await h.options.load()
+    const description = (name: string) => h.commands.menu.getSnapshot().groups[0]?.items.find(item => item.name === name)?.description
+    expect(description('plan')).toBe('开启计划模式')
+    expect(description('goal')).toBe('开启目标模式')
+    expect(description('clear')).toBe('clear description')
+    h.options.setIntent('plan')
+    expect(description('plan')).toBe('退出计划模式')
+    expect(description('goal')).toBe('开启目标模式')
+    h.options.setIntent('goal')
+    expect(description('plan')).toBe('开启计划模式')
+    expect(description('goal')).toBe('取消目标模式')
+    h.options.setIntent('message')
+    expect(description('goal')).toBe('开启目标模式')
+    expect(h.sink).not.toHaveBeenCalled()
+  })
+
+  it.each(['plan', 'goal'] as const)('已选 %s 时键入命令可选取消，键盘确认只消费命令 span', async (name) => {
+    const h = harness()
+    await h.pick(name)
+    const text = `/${name} keep text`
+    h.input.setDraft(text)
+    h.input.addImages(['image'])
+    h.commands.track(text, name.length + 1, { tier: 'plain' }, h.input.snapshot.draftRev)
+    await vi.waitFor(() => expect(h.commands.menu.getSnapshot().groups[0]?.items[0]?.description).toBe(name === 'plan' ? '退出计划模式' : '取消目标模式'))
+    expect(h.commands.arbitrate('enter', true)).toBe('pass')
+    expect(h.options.intent).toBe(name)
+    h.commands.arbitrate('enter', false)
+    expect(h.options.intent).toBe('message')
+    expect(h.input.snapshot).toMatchObject({ draft: ' keep text', imageIds: ['image'] })
+    expect(h.sink).not.toHaveBeenCalled()
+  })
+
+  it.each(['plan', 'goal'] as const)('重复提交裸 /%s 只取消模式，不发送或创建实体', async (name) => {
+    const h = harness()
+    await h.pick(name)
+    h.input.setDraft(` /${name} `)
+    h.input.addImages(['image'])
+    h.input.submit()
+    await vi.waitFor(() => expect(h.options.intent).toBe('message'))
+    expect(h.input.snapshot).toMatchObject({ draft: '', imageIds: ['image'] })
+    expect(h.sink).not.toHaveBeenCalled()
+  })
+
+  it('计划下的裸 /goal 切换意图，含正文的前导 /goal 规范为目标和正文', async () => {
     const h = harness()
     h.options.setIntent('plan')
     h.input.setDraft('/goal')

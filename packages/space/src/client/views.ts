@@ -7,18 +7,17 @@ export interface SessionEntry {
   item?: RegistryItem
 }
 
-/** 只重排展示快照，手动顺序始终留在核心 Workspace 中 */
+/** 只重排项目内的会话快照，项目顺序始终使用核心注册表 */
 export function sortWorkspaces(items: RegistryItem[], buckets: SessionBuckets, sort: SidebarLayout['workspaceSort']): { items: RegistryItem[], buckets: SessionBuckets } {
   if (sort === 'manual')
     return { items, buckets }
-  const latest = new Map([...buckets.rows].map(([id, rows]) => [id, rows.reduce((latest, row) => Math.max(latest, row.updatedAt), 0)]))
   return {
-    items: [...items].sort((a, b) => (latest.get(b.workspaceId) ?? 0) - (latest.get(a.workspaceId) ?? 0)),
+    items,
     buckets: { rows: new Map([...buckets.rows].map(([id, rows]) => [id, [...rows].sort((a, b) => b.updatedAt - a.updatedAt)])), misc: buckets.misc },
   }
 }
 
-export function sortSessions(entries: SessionEntry[], sort: SidebarLayout['sessionSort']): SessionEntry[] {
+export function sortSessions(entries: SessionEntry[], sort: 'updated' | 'title'): SessionEntry[] {
   return [...entries].sort((a, b) => (sort === 'title' ? a.session.displayTitle.localeCompare(b.session.displayTitle, 'zh-CN') : b.session.updatedAt - a.session.updatedAt) || a.session.id.localeCompare(b.session.id))
 }
 
@@ -38,14 +37,18 @@ export function projectGroups(items: RegistryItem[], buckets: SessionBuckets, la
     byId.delete(pin.id)
     return [entry]
   })
-  const entries = sortSessions([...byId.values()], layout.sessionSort)
+  const entries = sortSessions([...byId.values()], 'updated')
+  if (layout.sessionSort === 'manual') {
+    const order = new Map(layout.groupSessionOrder.map((id, index) => [id, index]))
+    entries.sort((a, b) => (order.get(a.session.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.session.id) ?? Number.MAX_SAFE_INTEGER))
+  }
   const groups = layout.groups.map(group => ({ group, entries: entries.filter(entry => layout.assignments[entry.session.id] === group.id) }))
   const ids = new Set(layout.groups.map(group => group.id))
   return { pinned, groups, ungrouped: entries.filter(entry => !ids.has(layout.assignments[entry.session.id]!)) }
 }
 
 /** 归档列表以核心归档集合为准，缺失摘要单独报告 */
-export function archivedEntries(items: RegistryItem[], sessions: SessionSnapshot, workspaces: WorkspaceSnapshot, query: string, sort: SidebarLayout['sessionSort']): { entries: SessionEntry[], missing: number } {
+export function archivedEntries(items: RegistryItem[], sessions: SessionSnapshot, workspaces: WorkspaceSnapshot, query: string, sort: 'updated' | 'title'): { entries: SessionEntry[], missing: number } {
   if (sessions.phase !== 'ready' || workspaces.phase !== 'ready')
     return { entries: [], missing: 0 }
   const owners = new Map(items.flatMap(item => item.sessionIds.map(id => [id, item] as const)))

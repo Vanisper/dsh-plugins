@@ -54,6 +54,8 @@ export const sidebarCss = `
 .dsh-space-heading-text{min-width:0;flex:1}
 .dsh-space-title{display:block;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dsh-space-session{display:flex;flex-wrap:wrap;align-items:center;gap:2px;min-width:0;min-height:30px;margin:2px 0;border-radius:6px;padding:0 6px 0 calc(var(--dsh-space-title-offset) - 24px)}
+.dsh-space-session.drop-before,.dsh-space-group.drop-before>.dsh-space-head{box-shadow:inset 0 2px var(--dsw-alias-state-business-primary,#4787e0)}
+.dsh-space-session.drop-after,.dsh-space-group.drop-after>.dsh-space-head{box-shadow:inset 0 -2px var(--dsw-alias-state-business-primary,#4787e0)}
 .dsh-space-session-actions{display:grid;grid-template-columns:repeat(3,24px);gap:2px;flex:none;width:76px;opacity:0}
 .dsh-space-session:is(:hover,:focus-within,.confirming)>.dsh-space-session-actions{opacity:1}
 .dsh-space-archive-confirm{grid-column:span 2;height:24px;border:0;border-radius:4px;background:var(--dsw-alias-state-error-primary,#c44242);color:white;font-size:12px!important;padding:0 4px}

@@ -195,6 +195,36 @@ async function hoverInfo(target: 'workspace' | 'session' = 'workspace'): Promise
     vi.useRealTimers()
 }
 
+async function mountOrdering() {
+  const state = await mount()
+  state.item.sessionIds = ['s', 'b', 'c']
+  const second = { ...state.item, workspaceId: 'w2', title: '第二项目', path: '/second', sessionIds: ['other'] }
+  state.workspaceSnapshot.items.push(second)
+  state.sessionSnapshot.ids.push('b', 'c', 'other')
+  Object.assign(state.sessionSnapshot.byId, {
+    b: { ...state.sessionSnapshot.byId.s, id: 'b', displayTitle: '会话 B', updatedAt: 30 },
+    c: { ...state.sessionSnapshot.byId.s, id: 'c', displayTitle: '会话 C', updatedAt: 20 },
+    other: { ...state.sessionSnapshot.byId.s, id: 'other', displayTitle: '其他项目会话', updatedAt: 40 },
+  })
+  vi.mocked(state.workspaces.insertSessionBefore).mockImplementation(async (workspaceId, id, before) => {
+    const item = state.workspaceSnapshot.items.find(item => item.workspaceId === workspaceId)!
+    item.sessionIds = item.sessionIds.filter(value => value !== id)
+    item.sessionIds.splice(before ? item.sessionIds.indexOf(before) : item.sessionIds.length, 0, id)
+    fixture.registry = { ...fixture.registry! }
+    fixture.receive?.(fixture.registry)
+    return item
+  })
+  await registry({ ...fixture.registry!, items: [state.item, second] })
+  return state
+}
+
+async function dragSession(id: string, target: string): Promise<void> {
+  await act(async () => {
+    document.querySelector(`[data-session-id="${id}"] .dsh-space-session-main`)!.dispatchEvent(new Event('dragstart', { bubbles: true, cancelable: true }))
+    document.querySelector(`[data-session-id="${target}"]`)!.dispatchEvent(new MouseEvent('drop', { bubbles: true, cancelable: true }))
+  })
+}
+
 function button(label: string): HTMLButtonElement {
   const scope = document.querySelector('dialog') ?? document
   const buttons = [...(scope.querySelector('.dsh-space-details')?.querySelectorAll('button') ?? []), ...scope.querySelectorAll('button')]
@@ -744,15 +774,72 @@ describe('侧栏交互', () => {
     expect(document.querySelector('.dsh-space-heading')?.getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('活动排序不允许拖动核心工作区或调用会话手动排序', async () => {
+  it('项目排序默认最近更新，项目与会话仍允许拖拽', async () => {
     const { workspaces } = await mount()
-    await click('最近活动')
-    expect(document.querySelector<HTMLButtonElement>('.dsh-space-heading')?.draggable).toBe(false)
-    expect(document.querySelector('.dsh-space-session [role="menu"]')?.textContent).not.toContain('上移')
+    expect(createLayoutStore().getSnapshot().workspaceSort).toBe('updated')
+    expect(document.querySelector<HTMLButtonElement>('.dsh-space-heading')?.draggable).toBe(true)
+    expect(document.querySelector<HTMLButtonElement>('.dsh-space-session-main')?.draggable).toBe(true)
+    expect(document.querySelector('.dsh-space-session [role="menu"]')?.textContent).toContain('上移')
     await click('手动排序')
     expect(document.querySelector<HTMLButtonElement>('.dsh-space-heading')?.draggable).toBe(true)
     expect(workspaces.insertBefore).not.toHaveBeenCalled()
     expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+  })
+
+  it('拖动项目不改变最近更新，拖动项目内会话成功后才切换手动排序', async () => {
+    const { workspaces } = await mountOrdering()
+    const headings = document.querySelectorAll('.dsh-space-heading')
+    expect(Array.from(headings).map(item => item.textContent)).toEqual(['演示空间', '第二项目'])
+    await act(async () => {
+      headings[1]!.dispatchEvent(new Event('dragstart', { bubbles: true }))
+      headings[0]!.closest('.dsh-space-group')!.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }))
+    })
+    expect(workspaces.insertBefore).toHaveBeenCalledWith('w2', 'w')
+    expect(createLayoutStore().getSnapshot().workspaceSort).toBe('updated')
+    await dragSession('s', 'c')
+    expect(workspaces.insertSessionBefore).toHaveBeenCalledExactlyOnceWith('w', 's', 'c')
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ workspaceSort: 'manual', sessionSort: 'updated' })
+    const rows = document.querySelector('.dsh-space-group')!.querySelectorAll('[data-session-id]')
+    expect(Array.from(rows).map(row => row.getAttribute('data-session-id'))).toEqual(['b', 's', 'c'])
+  })
+
+  it('跨项目或原位拖放不写入，保存失败保持最近更新', async () => {
+    const { workspaces } = await mountOrdering()
+    await dragSession('s', 'other')
+    await dragSession('s', 's')
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+    expect(createLayoutStore().getSnapshot().workspaceSort).toBe('updated')
+    vi.mocked(workspaces.insertSessionBefore).mockRejectedValueOnce(new Error('排序保存失败'))
+    await dragSession('s', 'c')
+    expect(document.body.textContent).toContain('排序保存失败')
+    expect(createLayoutStore().getSnapshot().workspaceSort).toBe('updated')
+  })
+
+  it('会话菜单按当前显示顺序上移，也会自动切换项目排序', async () => {
+    const { workspaces } = await mountOrdering()
+    await act(async () => {
+      const menu = document.querySelector('[data-session-id="s"] [role="menu"]')!
+      Array.from(menu.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent === '上移')!.click()
+    })
+    expect(workspaces.insertSessionBefore).toHaveBeenCalledExactlyOnceWith('w', 's', 'c')
+    expect(createLayoutStore().getSnapshot().workspaceSort).toBe('manual')
+  })
+
+  it('分组手动调序只保存展示顺序，两个视图排序互不联动', async () => {
+    const { workspaces } = await mountOrdering()
+    await click('分组视图')
+    expect(document.querySelector('[aria-label="排序方式"][role="menu"]')?.textContent).toBe('最近更新手动排序')
+    await dragSession('s', 'b')
+    expect(createLayoutStore().getSnapshot().groupSessionOrder).toEqual([])
+    await click('手动排序')
+    await dragSession('s', 'b')
+    expect(Array.from(document.querySelectorAll('[data-display-group=""] [data-session-id]')).map(row => row.getAttribute('data-session-id'))).toEqual(['other', 's', 'b', 'c'])
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ sessionSort: 'manual', workspaceSort: 'updated' })
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+    await click('最近更新')
+    expect(Array.from(document.querySelectorAll('[data-display-group=""] [data-session-id]')).map(row => row.getAttribute('data-session-id'))).toEqual(['other', 'b', 'c', 's'])
+    await click('手动排序')
+    expect(Array.from(document.querySelectorAll('[data-display-group=""] [data-session-id]')).map(row => row.getAttribute('data-session-id'))).toEqual(['other', 's', 'b', 'c'])
   })
 
   it('分组支持拖入会话，拖入未分组区域只清理标记', async () => {
@@ -764,6 +851,11 @@ describe('侧栏交互', () => {
       document.querySelector('.dsh-space-session-main')!.dispatchEvent(new Event('dragstart', { bubbles: true }))
       document.querySelector(target)!.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }))
     })
+    await move('[data-display-group="g"]')
+    expect(createLayoutStore().getSnapshot().assignments.s).toBeUndefined()
+    expect(document.querySelector<HTMLButtonElement>('.dsh-space-session-main')?.draggable).toBe(false)
+    expect(document.querySelector<HTMLButtonElement>('[data-display-group="g"] .dsh-space-section-title')?.draggable).toBe(false)
+    await click('手动排序')
     await move('[data-display-group="g"]')
     expect(createLayoutStore().getSnapshot().assignments.s).toBe('g')
     await move('[data-display-group=""]')

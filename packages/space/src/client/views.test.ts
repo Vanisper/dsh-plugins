@@ -33,6 +33,8 @@ it('活动排序不改写核心顺序，回到手动排序仍使用原始引用'
   expect(sorted.buckets.rows.get('w')?.map(row => row.id)).toEqual(['b', 'a'])
   expect(buckets.rows.get('w')?.map(row => row.id)).toEqual(['a', 'b'])
   expect(sortWorkspaces(items, buckets, 'manual').buckets).toBe(buckets)
+  const reversed = [...items].reverse()
+  expect(sortWorkspaces(reversed, buckets, 'updated').items).toBe(reversed)
 })
 
 it('归档投影包含空白记录，过滤与排序不修改核心数据，缺失摘要单独报告', () => {

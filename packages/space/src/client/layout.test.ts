@@ -99,8 +99,27 @@ describe('侧栏展示偏好', () => {
     const store = createLayoutStore()
     createLayoutStore().saveGroup({ id: 'g', title: '一', color: 'blue', collapsed: false }, true)
     store.setView('groups')
-    store.setSort({ workspaceSort: 'updated', sessionSort: 'title' })
-    expect(store.getSnapshot()).toMatchObject({ view: 'groups', workspaceSort: 'updated', sessionSort: 'title', groups: [{ id: 'g' }] })
+    store.setSort({ workspaceSort: 'updated', sessionSort: 'manual' })
+    expect(store.getSnapshot()).toMatchObject({ view: 'groups', workspaceSort: 'updated', sessionSort: 'manual', groups: [{ id: 'g' }] })
+  })
+
+  it('两个视图默认最近更新，旧按标题偏好回退且手动偏好保留', () => {
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ workspaceSort: 'updated', sessionSort: 'updated' })
+    localStorage.setItem('dsh-space.sidebar.layout', JSON.stringify({ sessionSort: 'title', workspaceSort: 'manual', groupSessionOrder: ['a', 'a', null, 3, 'b'] }))
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ sessionSort: 'updated', workspaceSort: 'manual', groupSessionOrder: ['a', 'b'] })
+  })
+
+  it('分组手动顺序独立保存，重新载入和切换排序不会改写项目偏好', () => {
+    const store = createLayoutStore()
+    store.saveGroup({ id: 'g', title: '分组', color: 'gray', collapsed: false }, true)
+    store.setSort({ sessionSort: 'manual' })
+    store.moveGroupSession({ id: 'c', before: 'a', groupId: 'g', order: ['a', 'b', 'c'] })
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ groupSessionOrder: ['c', 'a', 'b'], assignments: { c: 'g' }, workspaceSort: 'updated' })
+    store.setSort({ sessionSort: 'updated' })
+    store.moveGroupSession({ id: 'b', before: 'c', order: ['c', 'a', 'b'] })
+    expect(store.getSnapshot().groupSessionOrder).toEqual(['c', 'a', 'b'])
+    store.setSort({ sessionSort: 'manual' })
+    expect(store.getSnapshot().groupSessionOrder).toEqual(['c', 'a', 'b'])
   })
 })
 

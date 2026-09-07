@@ -32,6 +32,7 @@ import {
 } from './model.ts'
 import { observeRegistry } from './registry.ts'
 import { createRenameDialog } from './rename-dialog.ts'
+import { moveBefore, sessionOrderMoves } from './session-order.ts'
 import { archivedEntries, projectGroups, sortWorkspaces } from './views.ts'
 import { waitFor } from './wait.ts'
 import { createWorkspaceEdit } from './workspace-edit.ts'
@@ -202,6 +203,8 @@ export function createSidebar(
     const dragPin = React.useRef<Pin | undefined>(undefined)
     const dragSession = React.useRef<string | undefined>(undefined)
     const dragGroup = React.useRef<string | undefined>(undefined)
+    const [dropTarget, setDropTarget] = React.useState<{ kind: 'workspace' | 'session', id: string, after: boolean } | null>(null)
+    const dropClass = (kind: 'workspace' | 'session', id: string): string => dropTarget?.kind === kind && dropTarget.id === id ? ` drop-${dropTarget.after ? 'after' : 'before'}` : ''
     const listRef = React.useRef<HTMLDivElement | null>(null)
     const scrollPositions = React.useRef<Record<string, number>>({})
     const archiveRows = React.useRef(new Map<string, HTMLElement>())
@@ -628,12 +631,49 @@ export function createSidebar(
       (row.kind === 'chat') === (item.kind === 'chat')
       && !isPinned({ kind: 'workspace', id: row.workspaceId }),
     )
+    const projectRows = (item: RegistryItem): SessionView[] => {
+      const rows = (buckets.rows.get(item.workspaceId) ?? []).filter(row => !isPinned({ kind: 'session', id: row.id }))
+      return layout.workspaceSort === 'updated' ? [...rows].sort((a, b) => b.updatedAt - a.updatedAt) : rows
+    }
+    const moveProjectSession = (item: RegistryItem, id: string, before?: string): void => {
+      const order = projectRows(item).map(row => row.id)
+      const desired = moveBefore(order, id, before)
+      if (desired.every((id, index) => id === order[index]))
+        return
+      perform(async () => {
+        const core = workspaces.list.getSnapshot().items.find(row => row.workspaceId === item.workspaceId)
+        if (!core)
+          throw new Error('工作区已被移除')
+        for (const move of sessionOrderMoves(core.sessionIds, desired)) {
+          const latest = workspaces.list.getSnapshot().items.find(row => row.workspaceId === item.workspaceId)
+          if (!latest?.sessionIds.includes(move.id) || (move.before && !latest.sessionIds.includes(move.before)))
+            throw new Error('会话归属已变更，请重新检查列表')
+          await workspaces.insertSessionBefore(item.workspaceId, move.id, move.before)
+        }
+        layoutStore.setSort({ workspaceSort: 'manual' })
+      })
+    }
+    const moveGroupedSession = (id: string, before?: string, groupId?: string): void => updateLayout(() => {
+      layoutStore.moveGroupSession({ id, before, groupId, order: [...groups.groups.flatMap(group => group.entries), ...groups.ungrouped].map(entry => entry.session.id) })
+    })
+    const groupedMoves = (id: string): MenuAction[] => {
+      const groupId = layout.assignments[id]
+      const peers = (groupId ? groups.groups.find(row => row.group.id === groupId)?.entries : groups.ungrouped) ?? []
+      const index = peers.findIndex(row => row.session.id === id)
+      return ([-1, 1] as const).map(direction => ({
+        label: direction === -1 ? '上移' : '下移',
+        icon: direction === -1 ? 'up' : 'down',
+        group: 'order',
+        disabled: index < 0 || index + direction < 0 || index + direction >= peers.length,
+        run: () => moveGroupedSession(id, peers[direction < 0 ? index - 1 : index + 2]?.session.id, groupId),
+      }))
+    }
     const sessionActions = (
       session: SessionRow,
       item?: RegistryItem,
     ): MenuAction[] => {
       const pin: Pin = { kind: 'session', id: session.id }
-      const core = item && { ...item, sessionIds: (buckets.rows.get(item.workspaceId) ?? []).filter(row => !isPinned({ kind: 'session', id: row.id })).map(row => row.id) }
+      const core = item && { ...item, sessionIds: projectRows(item).map(row => row.id) }
       return [
         pinAction(pin),
         {
@@ -662,30 +702,28 @@ export function createSidebar(
               ),
             ),
         },
-        ...(isPinned(pin)
-          ? pinnedMoves(pin).map(action => ({ ...action, group: 'order' }))
-          : item?.kind === 'chat' || activeView === 'groups' || layout.workspaceSort !== 'manual'
-            ? []
-            : ([-1, 1] as const).map(direction => ({
-                label: direction === -1 ? '上移' : '下移',
-                group: 'order',
-                icon: direction === -1 ? ('up' as const) : ('down' as const),
-                disabled:
+        ...(activeView === 'groups' && layout.sessionSort !== 'manual'
+          ? []
+          : isPinned(pin)
+            ? pinnedMoves(pin).map(action => ({ ...action, group: 'order' }))
+            : activeView === 'groups'
+              ? groupedMoves(session.id)
+              : !item || item.kind === 'chat'
+                  ? []
+                  : ([-1, 1] as const).map(direction => ({
+                      label: direction === -1 ? '上移' : '下移',
+                      group: 'order',
+                      icon: direction === -1 ? ('up' as const) : ('down' as const),
+                      disabled:
             !core || sessionMoveAnchor(core, session.id, direction) === null,
-                run: () =>
-                  perform(async () => {
-                    if (core) {
-                      const anchor = sessionMoveAnchor(core, session.id, direction)
-                      if (anchor !== null) {
-                        await workspaces.insertSessionBefore(
-                          core.workspaceId,
-                          session.id,
-                          anchor,
-                        )
-                      }
-                    }
-                  }),
-              }))),
+                      run: () => {
+                        if (core) {
+                          const anchor = sessionMoveAnchor(core, session.id, direction)
+                          if (anchor !== null)
+                            moveProjectSession(item, session.id, anchor)
+                        }
+                      },
+                    }))),
         {
           label: '归档会话',
           group: 'archive',
@@ -709,25 +747,23 @@ export function createSidebar(
       },
       ...(isPinned({ kind: 'workspace', id: item.workspaceId })
         ? pinnedMoves({ kind: 'workspace', id: item.workspaceId }).map(action => ({ ...action, group: 'order' }))
-        : layout.workspaceSort !== 'manual'
-          ? []
-          : ([-1, 1] as const).map(direction => ({
-              label: direction === -1 ? '上移' : '下移',
-              group: 'order',
-              icon: direction === -1 ? ('up' as const) : ('down' as const),
-              disabled:
+        : ([-1, 1] as const).map(direction => ({
+            label: direction === -1 ? '上移' : '下移',
+            group: 'order',
+            icon: direction === -1 ? ('up' as const) : ('down' as const),
+            disabled:
           moveAnchor(workspacePeers(item), item.workspaceId, direction)
           === null,
-              run: () => {
-                const anchor = moveAnchor(
-                  workspacePeers(item),
-                  item.workspaceId,
-                  direction,
-                )
-                if (anchor !== null)
-                  perform(() => workspaces.insertBefore(item.workspaceId, anchor))
-              },
-            }))),
+            run: () => {
+              const anchor = moveAnchor(
+                workspacePeers(item),
+                item.workspaceId,
+                direction,
+              )
+              if (anchor !== null)
+                perform(() => workspaces.insertBefore(item.workspaceId, anchor))
+            },
+          }))),
       ...(item.kind === 'plain'
         ? [
             {
@@ -797,10 +833,13 @@ export function createSidebar(
       flat = false,
     ): unknown => {
       const status = sessionStatus(session)
+      const pin: Pin = { kind: 'session', id: session.id }
+      const canDrag = !busy && (activeView === 'groups' ? layout.sessionSort === 'manual' : isPinned(pin) || (!!item && item.kind !== 'chat'))
+      const acceptsSession = (): boolean => canDrag && !isPinned(pin) && !!dragSession.current && (activeView === 'groups' || (!!item && item.sessionIds.includes(dragSession.current)))
       return e(
         'div',
         {
-          'className': `dsh-space-session${flat ? ' flat' : ''}${sessionState.current === session.id ? ' current' : ''}${archiveConfirmation === session.id ? ' confirming' : ''}`,
+          'className': `dsh-space-session${flat ? ' flat' : ''}${sessionState.current === session.id ? ' current' : ''}${archiveConfirmation === session.id ? ' confirming' : ''}${dropClass('session', session.id)}`,
           'data-session-id': session.id,
           'ref': (node: HTMLElement | null) => {
             if (node)
@@ -810,6 +849,44 @@ export function createSidebar(
           },
           'key': session.id,
           'onContextMenu': openContextMenu,
+          'onDragOver': (event: DragEvent) => {
+            if (acceptsSession() || (canDrag && isPinned(pin) && dragPin.current)) {
+              event.preventDefault()
+              const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+              setDropTarget({ kind: 'session', id: session.id, after: !isPinned(pin) && event.clientY > rect.top + rect.height / 2 })
+            }
+          },
+          'onDragLeave': (event: DragEvent) => {
+            if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null))
+              setDropTarget(null)
+          },
+          'onDrop': (event: DragEvent) => {
+            setDropTarget(null)
+            if (canDrag && isPinned(pin) && dragPin.current) {
+              event.preventDefault()
+              event.stopPropagation()
+              layoutStore.movePin(dragPin.current, pin)
+              dragPin.current = undefined
+            }
+            else if (acceptsSession()) {
+              event.preventDefault()
+              event.stopPropagation()
+              const from = dragSession.current!
+              dragSession.current = undefined
+              const rect = event.currentTarget instanceof HTMLElement ? event.currentTarget.getBoundingClientRect() : undefined
+              const after = rect && event.clientY > rect.top + rect.height / 2
+              const peers = activeView === 'groups'
+                ? (layout.assignments[session.id] ? groups.groups.find(row => row.group.id === layout.assignments[session.id])?.entries : groups.ungrouped)?.map(row => row.session.id) ?? []
+                : projectRows(item!).map(row => row.id)
+              const before = after ? peers[peers.indexOf(session.id) + 1] : session.id
+              if (from !== session.id) {
+                if (activeView === 'groups')
+                  moveGroupedSession(from, before, layout.assignments[session.id])
+                else
+                  moveProjectSession(item!, from, before)
+              }
+            }
+          },
           'onPointerLeave': stopInfoTimer,
           'onPointerEnter': (event: PointerEvent) => {
             if (event.pointerType === 'mouse' && item && item.kind !== 'chat')
@@ -825,15 +902,22 @@ export function createSidebar(
             'disabled': busy,
             'aria-current':
               sessionState.current === session.id ? 'page' : undefined,
-            'draggable': !busy && (activeView === 'groups' || isPinned({ kind: 'session', id: session.id })),
+            'draggable': canDrag,
             'onDragStart': (event: DragEvent) => {
-              if (activeView === 'groups')
-                dragSession.current = session.id
+              if (!canDrag) {
+                event.preventDefault()
+                return
+              }
+              stopInfoTimer()
+              setInfo(null)
+              if (isPinned(pin))
+                dragPin.current = pin
               else
-                dragPin.current = { kind: 'session', id: session.id }
+                dragSession.current = session.id
               event.dataTransfer?.setData('text/plain', session.id)
             },
             'onDragEnd': () => {
+              setDropTarget(null)
               dragPin.current = undefined
               dragSession.current = undefined
             },
@@ -913,21 +997,34 @@ export function createSidebar(
       return e(
         'section',
         {
-          className: 'dsh-space-group',
+          className: `dsh-space-group${dropClass('workspace', item.workspaceId)}`,
           key: item.workspaceId,
           onDragOver: (event: DragEvent) => {
-            if (!busy && layout.workspaceSort === 'manual' && dragWorkspace.current && !isPinned({ kind: 'workspace', id: item.workspaceId }))
+            if (!busy && dragWorkspace.current && !isPinned({ kind: 'workspace', id: item.workspaceId })) {
               event.preventDefault()
+              const rect = (event.currentTarget as HTMLElement).querySelector('.dsh-space-head')!.getBoundingClientRect()
+              setDropTarget({ kind: 'workspace', id: item.workspaceId, after: event.clientY > rect.top + rect.height / 2 })
+            }
+          },
+          onDragLeave: (event: DragEvent) => {
+            if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null))
+              setDropTarget(null)
           },
           onDrop: (event: DragEvent) => {
             const from = dragWorkspace.current
-            if (busy || layout.workspaceSort !== 'manual' || !from || isPinned({ kind: 'workspace', id: item.workspaceId }))
+            if (busy || !from || isPinned({ kind: 'workspace', id: item.workspaceId }))
               return
             event.preventDefault()
             event.stopPropagation()
             dragWorkspace.current = undefined
-            if (from && from !== item.workspaceId)
-              perform(() => workspaces.insertBefore(from, item.workspaceId))
+            setDropTarget(null)
+            if (from !== item.workspaceId) {
+              const rect = (event.currentTarget as HTMLElement).querySelector('.dsh-space-head')!.getBoundingClientRect()
+              const peers = workspacePeers(item)
+              const before = event.clientY > rect.top + rect.height / 2 ? peers[peers.findIndex(row => row.workspaceId === item.workspaceId) + 1]?.workspaceId : item.workspaceId
+              if (before !== from)
+                perform(() => workspaces.insertBefore(from, before))
+            }
           },
         },
         e(
@@ -951,8 +1048,14 @@ export function createSidebar(
               'aria-expanded': open,
               'aria-current': item.workspaceId === draftWorkspaceId ? 'location' : undefined,
               'aria-description': item.kind === 'space' ? '空间项目' : undefined,
-              'draggable': !busy && (layout.workspaceSort === 'manual' || isPinned({ kind: 'workspace', id: item.workspaceId })),
+              'draggable': !busy,
               'onDragStart': (event: DragEvent) => {
+                if (busy) {
+                  event.preventDefault()
+                  return
+                }
+                stopInfoTimer()
+                setInfo(null)
                 if (isPinned({ kind: 'workspace', id: item.workspaceId }))
                   dragPin.current = { kind: 'workspace', id: item.workspaceId }
                 else
@@ -960,6 +1063,7 @@ export function createSidebar(
                 event.dataTransfer?.setData('text/plain', item.workspaceId)
               },
               'onDragEnd': () => {
+                setDropTarget(null)
                 dragWorkspace.current = undefined
                 dragPin.current = undefined
               },
@@ -1055,17 +1159,17 @@ export function createSidebar(
       const renderEntries = (entries: typeof groups.ungrouped, key: string, label: string): unknown => renderLimited(entries, key, label, entry => entry.session.id === sessionState.current, entry => renderSession(entry.session, entry.item, true))
       const drop = (groupId?: string): { onDragOver: (event: DragEvent) => void, onDrop: (event: DragEvent) => void } => ({
         onDragOver: (event: DragEvent) => {
-          if (!busy && (dragSession.current || (groupId && dragGroup.current)))
+          if (!busy && layout.sessionSort === 'manual' && (dragSession.current || (groupId && dragGroup.current)))
             event.preventDefault()
         },
         onDrop: (event: DragEvent) => {
-          if (busy)
+          if (busy || layout.sessionSort !== 'manual')
             return
           if (dragSession.current) {
             event.preventDefault()
             event.stopPropagation()
             const id = dragSession.current
-            updateLayout(() => layoutStore.assignGroup(id, groupId))
+            moveGroupedSession(id, undefined, groupId)
           }
           else if (groupId && dragGroup.current) {
             event.preventDefault()
@@ -1090,8 +1194,12 @@ export function createSidebar(
             'disabled': busy,
             'aria-expanded': !group.collapsed,
             'aria-label': `展开或收起分组 ${group.title}`,
-            'draggable': !busy,
+            'draggable': !busy && layout.sessionSort === 'manual',
             'onDragStart': (event: DragEvent) => {
+              if (busy || layout.sessionSort !== 'manual') {
+                event.preventDefault()
+                return
+              }
               dragGroup.current = group.id
               event.dataTransfer?.setData('text/plain', group.id)
             },
@@ -1105,7 +1213,7 @@ export function createSidebar(
           ] })), !group.collapsed ? renderEntries(entries, `group:${group.id}`, group.title) : null, !group.collapsed && !entries.length ? e('div', { className: 'dsh-space-section-empty' }, '暂无会话') : null)), groupDraft && (!groupDraft.original || !layout.groups.some(group => group.id === groupDraft.original?.id)) ? renderGroupEditor() : null, e('section', { 'className': 'dsh-space-section', 'aria-label': '未分组会话', 'data-display-group': '', ...drop() }, layout.groups.length ? e('div', { className: 'dsh-space-section-head' }, e('span', { className: 'dsh-space-toolbar-title' }, '未分组')) : null, renderEntries(groups.ungrouped, 'groups:ungrouped', '未分组会话'), !groups.ungrouped.length ? e('div', { className: 'dsh-space-section-empty' }, '暂无未分组会话') : null))
     }
     const archiveSortActions = (): MenuAction[] => [
-      { label: '最近活动', icon: 'clock', checked: archiveSort === 'updated', run: () => setArchiveSort('updated') },
+      { label: '最近更新', icon: 'clock', checked: archiveSort === 'updated', run: () => setArchiveSort('updated') },
       { label: '按标题', icon: 'edit', checked: archiveSort === 'title', run: () => setArchiveSort('title') },
     ]
     const openSearch = (): void => {
@@ -1148,12 +1256,12 @@ export function createSidebar(
         ? archiveSortActions()
         : activeView === 'workspaces'
           ? [
+              { label: '最近更新', icon: 'clock', checked: layout.workspaceSort === 'updated', run: () => layoutStore.setSort({ workspaceSort: 'updated' }) },
               { label: '手动排序', icon: 'layers', checked: layout.workspaceSort === 'manual', run: () => layoutStore.setSort({ workspaceSort: 'manual' }) },
-              { label: '最近活动', icon: 'clock', checked: layout.workspaceSort === 'updated', run: () => layoutStore.setSort({ workspaceSort: 'updated' }) },
             ]
           : [
-              { label: '最近活动', icon: 'clock', checked: layout.sessionSort === 'updated', run: () => layoutStore.setSort({ sessionSort: 'updated' }) },
-              { label: '按标题', icon: 'edit', checked: layout.sessionSort === 'title', run: () => layoutStore.setSort({ sessionSort: 'title' }) },
+              { label: '最近更新', icon: 'clock', checked: layout.sessionSort === 'updated', run: () => layoutStore.setSort({ sessionSort: 'updated' }) },
+              { label: '手动排序', icon: 'layers', checked: layout.sessionSort === 'manual', run: () => layoutStore.setSort({ sessionSort: 'manual' }) },
             ] }), e(IconButton, { icon: archiveOpen ? 'close' : 'archive', label: archiveOpen ? '关闭归档' : '查看已归档', disabled: busy, onClick: () => showArchive(!archiveOpen) }))
     }
     const renderArchive = (showHeading = true): unknown => e(ArchiveView, {

@@ -1,5 +1,6 @@
 import type { SessionBuckets, SessionView } from './model.ts'
 import type { RegistryItem } from './types.ts'
+import { moveBefore } from './session-order.ts'
 
 export const SECTION_IDS = ['pinned', 'chats', 'workspaces'] as const
 export type SectionId = typeof SECTION_IDS[number]
@@ -21,8 +22,10 @@ export interface SidebarLayout {
   sections: SectionId[]
   collapsed: SectionId[]
   view: SidebarView
+  /** 项目视图内的会话排序，不参与项目顺序 */
   workspaceSort: 'manual' | 'updated'
-  sessionSort: 'updated' | 'title'
+  sessionSort: 'updated' | 'manual'
+  groupSessionOrder: string[]
   groups: DisplayGroup[]
   assignments: Record<string, string>
 }
@@ -40,13 +43,14 @@ export interface LayoutStore {
   deleteGroup: (id: string) => void
   assignGroup: (sessionId: string, groupId?: string) => void
   moveGroup: (id: string, before?: string) => void
+  moveGroupSession: (input: { id: string, before?: string, groupId?: string, order: string[] }) => void
 }
 export type LayoutEntry
   = | { kind: 'workspace', item: RegistryItem, rows: SessionView[] }
     | { kind: 'session', session: SessionView, item?: RegistryItem }
 
 const STORAGE_KEY = 'dsh-space.sidebar.layout'
-const defaults = (): SidebarLayout => ({ pins: [], sections: [...SECTION_IDS], collapsed: [], view: 'workspaces', workspaceSort: 'manual', sessionSort: 'updated', groups: [], assignments: {} })
+const defaults = (): SidebarLayout => ({ pins: [], sections: [...SECTION_IDS], collapsed: [], view: 'workspaces', workspaceSort: 'updated', sessionSort: 'updated', groupSessionOrder: [], groups: [], assignments: {} })
 const samePin = (a: Pin, b: Pin): boolean => a.kind === b.kind && a.id === b.id
 const isSection = (value: unknown): value is SectionId => SECTION_IDS.includes(value as SectionId)
 
@@ -76,8 +80,9 @@ function decode(raw: string | null): SidebarLayout {
       groups,
       assignments,
       view: data.view === 'groups' ? 'groups' : 'workspaces',
-      workspaceSort: data.workspaceSort === 'updated' ? 'updated' : 'manual',
-      sessionSort: data.sessionSort === 'title' ? 'title' : 'updated',
+      workspaceSort: data.workspaceSort === 'manual' ? 'manual' : 'updated',
+      sessionSort: data.sessionSort === 'manual' ? 'manual' : 'updated',
+      groupSessionOrder: [...new Set((Array.isArray(data.groupSessionOrder) ? data.groupSessionOrder : []).filter((id: unknown) => typeof id === 'string' && id))] as string[],
     }
   }
   catch {
@@ -209,6 +214,19 @@ export function createLayoutStore(): LayoutStore {
         const index = groups.findIndex(group => group.id === before)
         groups.splice(index < 0 ? groups.length : index, 0, group)
         return { ...value, groups }
+      })
+    },
+    moveGroupSession({ id, before, groupId, order }): void {
+      change((value) => {
+        if (value.sessionSort !== 'manual' || id === before)
+          return value
+        if (groupId && !value.groups.some(group => group.id === groupId))
+          throw new Error('目标分组已被移除')
+        const assignments = { ...value.assignments }
+        delete assignments[id]
+        if (groupId)
+          Object.defineProperty(assignments, id, { value: groupId, enumerable: true, configurable: true, writable: true })
+        return { ...value, assignments, groupSessionOrder: moveBefore([...new Set([...value.groupSessionOrder, ...order])], id, before) }
       })
     },
   }

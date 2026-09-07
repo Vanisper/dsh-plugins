@@ -1,6 +1,6 @@
 import type { DisplayGroup, GroupColor } from './layout.ts'
 import type { ReactLike } from './types.ts'
-import { createControls } from './controls.ts'
+import { createControls, tooltipProps } from './controls.ts'
 import { GROUP_COLORS } from './layout.ts'
 
 interface Props {
@@ -50,7 +50,7 @@ export function createGroupEditor(React: ReactLike): (props: Props) => unknown {
       'required': true,
       'value': title,
       'onChange': (event: { target: HTMLInputElement }) => onChange({ ...group, title: event.target.value }),
-    }), e(IconButton, { icon: 'check', label: '保存分组', disabled: !title.trim(), onClick: save }), e(IconButton, { icon: 'close', label: '取消编辑分组', onClick: onCancel })), e('div', { 'className': 'dsh-space-swatches', 'role': 'radiogroup', 'aria-label': '分组颜色' }, ...Object.entries(GROUP_COLORS).map(([value, label]) => e('label', { key: value, title: label }, e('input', {
+    }), e(IconButton, { icon: 'check', label: '保存分组', disabled: !title.trim(), onClick: save }), e(IconButton, { icon: 'close', label: '取消编辑分组', onClick: onCancel })), e('div', { 'className': 'dsh-space-swatches', 'role': 'radiogroup', 'aria-label': '分组颜色' }, ...Object.entries(GROUP_COLORS).map(([value, label]) => e('label', { key: value, ...tooltipProps(label) }, e('input', {
       'type': 'radio',
       'name': `group-color-${group.id}`,
       'aria-label': label,

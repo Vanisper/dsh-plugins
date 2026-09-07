@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { RegistryItem } from './types.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createLayoutStore, projectLayout, visibleEntries } from './layout.ts'
+import { createLayoutStore, listSort, projectLayout, visibleEntries } from './layout.ts'
 
 afterEach(() => {
   localStorage.clear()
@@ -9,11 +9,11 @@ afterEach(() => {
 })
 
 describe('侧栏展示偏好', () => {
-  it('校验持久化输入并补齐三个分区，类型不同的同名 ID 可独立置顶', () => {
+  it('校验持久化输入并补齐分区，未分组默认置底，类型不同的同名 ID 可独立置顶', () => {
     localStorage.setItem('dsh-space.sidebar.layout', JSON.stringify({ sections: ['chats', 'chats', 'other'], pins: [null, { kind: 'session', id: 's' }, { kind: 'session', id: 's' }] }))
     const store = createLayoutStore()
     store.setPinned({ kind: 'workspace', id: 's' }, true)
-    expect(store.getSnapshot().sections).toEqual(['chats', 'pinned', 'workspaces'])
+    expect(store.getSnapshot().sections).toEqual(['chats', 'pinned', 'workspaces', 'misc'])
     expect(store.getSnapshot().pins).toHaveLength(2)
     expect(createLayoutStore().getSnapshot()).toEqual(store.getSnapshot())
   })
@@ -27,7 +27,7 @@ describe('侧栏展示偏好', () => {
     store.movePin(session, workspace)
     store.moveSection('workspaces', 'pinned')
     store.setCollapsed('pinned', true)
-    expect(store.getSnapshot()).toMatchObject({ pins: [session, workspace], sections: ['workspaces', 'pinned', 'chats'], collapsed: ['pinned'] })
+    expect(store.getSnapshot()).toMatchObject({ pins: [workspace, session], orders: { 'project:pinned': ['session:s', 'workspace:w'] }, sections: ['workspaces', 'pinned', 'chats', 'misc'], collapsed: ['pinned'] })
     store.setPinned(session, false)
     expect(store.getSnapshot().pins).toEqual([workspace])
   })
@@ -64,7 +64,7 @@ describe('侧栏展示偏好', () => {
 
   it('兼容旧偏好并过滤失效分组输入', () => {
     localStorage.setItem('dsh-space.sidebar.layout', JSON.stringify({ groups: [null, { id: 'g', title: ' 分组 ', color: 'invalid' }, { id: 'g', title: '重复' }], assignments: { s: 'g', orphan: 'gone' }, view: 'invalid', sessionSort: 'created' }))
-    expect(createLayoutStore().getSnapshot()).toMatchObject({ view: 'workspaces', sessionSort: 'updated', groups: [{ id: 'g', title: '分组', color: 'gray', collapsed: false }], assignments: { s: 'g' } })
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ view: 'workspaces', sorts: { 'group:g': 'updated' }, groups: [{ id: 'g', title: '分组', color: 'gray', collapsed: false }], assignments: { s: 'g' } })
   })
 
   it('每个会话只分配一个分组，删除分组不影响置顶且清理全部标记', () => {
@@ -93,33 +93,50 @@ describe('侧栏展示偏好', () => {
     createLayoutStore().deleteGroup('g')
     expect(() => store.saveGroup(group)).toThrow('已被移除')
     expect(() => store.assignGroup('s', 'g')).toThrow('已被移除')
+    expect(() => store.assignGroup('new-session', 'g', true)).not.toThrow()
+    expect(store.getSnapshot().assignments['new-session']).toBeUndefined()
   })
 
   it('切换视图和排序不会覆盖其他页面的分组变更', () => {
     const store = createLayoutStore()
     createLayoutStore().saveGroup({ id: 'g', title: '一', color: 'blue', collapsed: false }, true)
     store.setView('groups')
-    store.setSort({ workspaceSort: 'updated', sessionSort: 'manual' })
-    expect(store.getSnapshot()).toMatchObject({ view: 'groups', workspaceSort: 'updated', sessionSort: 'manual', groups: [{ id: 'g' }] })
+    store.setListSort('group:g', 'manual')
+    expect(store.getSnapshot()).toMatchObject({ view: 'groups', sorts: { 'group:g': 'manual' }, groups: [{ id: 'g' }] })
+    expect(listSort(store.getSnapshot(), 'project:workspaces')).toBe('updated')
   })
 
   it('两个视图默认最近更新，旧按标题偏好回退且手动偏好保留', () => {
-    expect(createLayoutStore().getSnapshot()).toMatchObject({ workspaceSort: 'updated', sessionSort: 'updated' })
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ sorts: {} })
     localStorage.setItem('dsh-space.sidebar.layout', JSON.stringify({ sessionSort: 'title', workspaceSort: 'manual', groupSessionOrder: ['a', 'a', null, 3, 'b'] }))
-    expect(createLayoutStore().getSnapshot()).toMatchObject({ sessionSort: 'updated', workspaceSort: 'manual', groupSessionOrder: ['a', 'b'] })
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ sorts: { 'groups:sessions': 'updated', 'project:workspaces': 'manual' }, orders: { 'groups:sessions': ['a', 'b'] } })
   })
 
   it('分组手动顺序独立保存，重新载入和切换排序不会改写项目偏好', () => {
     const store = createLayoutStore()
     store.saveGroup({ id: 'g', title: '分组', color: 'gray', collapsed: false }, true)
-    store.setSort({ sessionSort: 'manual' })
     store.moveGroupSession({ id: 'c', before: 'a', groupId: 'g', order: ['a', 'b', 'c'] })
-    expect(createLayoutStore().getSnapshot()).toMatchObject({ groupSessionOrder: ['c', 'a', 'b'], assignments: { c: 'g' }, workspaceSort: 'updated' })
-    store.setSort({ sessionSort: 'updated' })
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ orders: { 'group:g': ['c', 'a', 'b'] }, sorts: { 'group:g': 'manual' }, assignments: { c: 'g' } })
+    store.setListSort('group:g', 'updated')
     store.moveGroupSession({ id: 'b', before: 'c', order: ['c', 'a', 'b'] })
-    expect(store.getSnapshot().groupSessionOrder).toEqual(['c', 'a', 'b'])
-    store.setSort({ sessionSort: 'manual' })
-    expect(store.getSnapshot().groupSessionOrder).toEqual(['c', 'a', 'b'])
+    expect(store.getSnapshot().orders['group:g']).toEqual(['c', 'a', 'b'])
+    expect(store.getSnapshot().sorts).toMatchObject({ 'group:g': 'updated', 'groups:sessions': 'manual' })
+    store.setListSort('group:g', 'manual')
+    expect(store.getSnapshot().orders['group:g']).toEqual(['c', 'a', 'b'])
+  })
+
+  it('平铺分区顺序各自持久化，无效拖放不切换排序', () => {
+    const store = createLayoutStore()
+    store.moveFlatSession({ section: 'chats', id: 'a', before: 'x', order: ['a', 'b'] })
+    store.moveFlatSession({ section: 'chats', id: 'a', before: 'b', order: ['a', 'b'] })
+    expect(listSort(store.getSnapshot(), 'project:chats')).toBe('updated')
+    store.moveFlatSession({ section: 'chats', id: 'b', before: 'a', order: ['a', 'b'] })
+    store.moveFlatSession({ section: 'misc', id: 'x', order: ['x', 'y'] })
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ sorts: { 'project:chats': 'manual', 'project:misc': 'manual' }, orders: { 'project:chats': ['b', 'a'], 'project:misc': ['y', 'x'] } })
+    expect(listSort(store.getSnapshot(), 'project:workspaces')).toBe('updated')
+    store.moveSection('misc', 'pinned')
+    store.setCollapsed('misc', true)
+    expect(createLayoutStore().getSnapshot()).toMatchObject({ sections: ['misc', 'pinned', 'chats', 'workspaces'], collapsed: ['misc'] })
   })
 })
 
@@ -130,6 +147,24 @@ describe('分区投影', () => {
     { kind: 'chat', workspaceId: 'c', path: '/c', title: 'c', sessionIds: ['d', 'e'] },
   ]
   const buckets = { rows: new Map([['w', [row('a'), row('b')]], ['c', [row('d'), row('e', 2)]]]), misc: [row('misc')] }
+
+  it('项目大组共享会话排序，但不影响置顶项目、对话及项目行自身顺序', () => {
+    const store = createLayoutStore()
+    const extra: RegistryItem = { ...items[0]!, workspaceId: 'w2', sessionIds: ['f', 'g'] }
+    const input = { rows: new Map([...buckets.rows, ['w', [row('a', 1), row('b', 9)]], ['w2', [row('f', 1), row('g', 10)]]] as [string, ReturnType<typeof row>[]][]), misc: buckets.misc }
+    const projectIds = (result: ReturnType<typeof projectLayout>) => result.workspaces.map(entry => entry.kind === 'workspace' && entry.item.workspaceId)
+    const projectRows = (result: ReturnType<typeof projectLayout>) => result.workspaces.map(entry => entry.kind === 'workspace' && entry.rows.map(row => row.id))
+    const recent = projectLayout([...items, extra], input, [], store.getSnapshot())
+    expect(projectIds(recent)).toEqual(['w', 'w2'])
+    expect(projectRows(recent)).toEqual([['b', 'a'], ['g', 'f']])
+    store.setListSort('project:workspaces', 'manual')
+    const manual = projectLayout([...items, extra], input, [], store.getSnapshot())
+    expect(projectIds(manual)).toEqual(['w', 'w2'])
+    expect(projectRows(manual)).toEqual([['a', 'b'], ['f', 'g']])
+    const pinned = projectLayout([...items, extra], input, [{ kind: 'workspace', id: 'w' }], store.getSnapshot())
+    expect(pinned.pinned[0]).toMatchObject({ rows: [row('b', 9), row('a', 1)] })
+    expect(pinned.chats).toEqual(recent.chats)
+  })
 
   it('置顶工作区和单个会话无重复，取消后恢复核心位置', () => {
     const pins = [{ kind: 'workspace' as const, id: 'w' }, { kind: 'session' as const, id: 'a' }]
@@ -145,6 +180,16 @@ describe('分区投影', () => {
     const result = projectLayout(items, buckets, [])
     expect(result.chats.map(entry => entry.kind === 'session' && entry.session.id)).toEqual(['e', 'd'])
     expect(result.workspaces).toHaveLength(1)
+    expect(result.misc).toEqual([{ kind: 'session', session: row('misc') }])
+    expect(projectLayout(items, buckets, [{ kind: 'session', id: 'misc' }]).misc).toEqual([])
+  })
+
+  it('平铺分区手动偏好只调整展示，缺少顺序的新增条目按更新时间补在后面', () => {
+    const preferences = { sorts: { 'project:chats': 'manual' as const }, orders: { 'project:chats': ['gone', 'd'], 'project:misc': ['misc'] } }
+    const result = projectLayout(items, buckets, [], preferences)
+    expect(result.chats.map(entry => entry.kind === 'session' && entry.session.id)).toEqual(['d', 'e'])
+    expect(projectLayout(items, buckets, [], { ...preferences, sorts: { 'project:chats': 'updated' } }).chats.map(entry => entry.kind === 'session' && entry.session.id)).toEqual(['e', 'd'])
+    expect(items[1]!.sessionIds).toEqual(['d', 'e'])
   })
 
   it('归档、未加载或已移除的置顶不创建幽灵条目', () => {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { RegistryItem, SessionSnapshot, WorkspaceSnapshot } from './types.ts'
 import { afterEach, expect, it } from 'vitest'
-import { createLayoutStore } from './layout.ts'
+import { createLayoutStore, projectLayout } from './layout.ts'
 import { archivedEntries, projectGroups, sortWorkspaces } from './views.ts'
 
 afterEach(() => localStorage.clear())
@@ -26,6 +26,21 @@ it('所有归属平铺，置顶工作区不隐藏会话，单个置顶优先且�
   store.setPinned({ kind: 'session', id: 'a' }, false)
   expect(projectGroups(items, buckets, store.getSnapshot()).groups[0]?.entries.map(entry => entry.session.id)).toEqual(['c', 'a'])
   expect(items[0]?.sessionIds).toEqual(['a', 'b'])
+})
+
+it('置顶会话参与最近更新和手动排序，两个视图的顺序互不覆盖', () => {
+  const store = createLayoutStore()
+  for (const id of ['a', 'b', 'c'])
+    store.setPinned({ kind: 'session', id }, true)
+  const ids = () => projectGroups(items, buckets, store.getSnapshot()).pinned.map(entry => entry.session.id)
+  expect(ids()).toEqual(['b', 'c', 'a'])
+  store.movePin({ kind: 'session', id: 'a' }, { kind: 'session', id: 'b' }, 'groups', ids().map(id => ({ kind: 'session', id })))
+  expect(ids()).toEqual(['a', 'b', 'c'])
+  expect(projectLayout(items, buckets, store.getSnapshot().pins, store.getSnapshot()).pinned.map(entry => entry.kind === 'session' && entry.session.id)).toEqual(['b', 'c', 'a'])
+  store.setListSort('groups:pinned', 'updated')
+  expect(ids()).toEqual(['b', 'c', 'a'])
+  store.setListSort('groups:pinned', 'manual')
+  expect(ids()).toEqual(['a', 'b', 'c'])
 })
 
 it('活动排序不改写核心顺序，回到手动排序仍使用原始引用', () => {

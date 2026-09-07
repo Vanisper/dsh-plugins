@@ -7,6 +7,7 @@ function harness() {
     create: vi.fn(async (_workspace: string, id: string) => id),
     adopt: vi.fn(async () => {}),
     clearSelection: vi.fn(),
+    created: vi.fn(),
   }
   return { port, draft: createDraftSession(port) }
 }
@@ -14,6 +15,20 @@ const payload = { text: 'hello', imageIds: ['image-a'] }
 const signal = (): AbortSignal => new AbortController().signal
 
 describe('新会话草稿的实体边界', () => {
+  it('展示分组在真实创建后绑定，交付失败后的重试不覆盖已调整的分组', async () => {
+    const { draft, port } = harness()
+    draft.begin('project', 'group')
+    expect(port.created).not.toHaveBeenCalled()
+    port.adopt.mockRejectedValueOnce(new Error('not ready'))
+    await expect(draft.submit(payload, signal())).rejects.toThrow('not ready')
+    const id = draft.getSnapshot().sessionId
+    expect(port.created).toHaveBeenCalledExactlyOnceWith(id, 'group')
+    draft.begin('project', 'different')
+    await draft.submit(payload, signal())
+    expect(port.created).toHaveBeenCalledTimes(1)
+    draft.begin('project')
+    expect(draft.getSnapshot().displayGroupId).toBeUndefined()
+  })
   it('新建和切换目标只改变草稿意图', () => {
     const { draft, port } = harness()
     draft.begin('project-a')
@@ -107,13 +122,14 @@ describe('新会话草稿的实体边界', () => {
     port.create.mockImplementationOnce(() => new Promise((resolve) => {
       finish = resolve
     }))
-    draft.begin('project')
+    draft.begin('project', 'group')
     const first = draft.submit(payload, signal())
     draft[action]()
     finish('real-session')
     await expect(first).rejects.toThrow('已离开')
     expect(port.adopt).not.toHaveBeenCalled()
     expect(draft.getSnapshot().sessionId).toBe('real-session')
+    expect(port.created).toHaveBeenCalledExactlyOnceWith('real-session', 'group')
   })
 
   it('取消后的目录响应被保留，但不继续创建 Session', async () => {

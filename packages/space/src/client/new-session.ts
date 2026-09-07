@@ -4,11 +4,11 @@ import { fetchRegistry } from './api.ts'
 
 /** 通用新建沿用当前编辑目标；显式工作区不参与推断，描述读取失败时保留当前位置 */
 export function createNewSessionAction(
-  draft: DraftSession,
+  draft: Pick<DraftSession, 'begin' | 'subscribe' | 'getSnapshot'>,
   sessions: Pick<SessionService, 'list'>,
   workspaces: Pick<WorkspaceService, 'list'>,
   notify: (message: string) => void,
-): { begin: (workspaceId?: string) => void, dispose: () => void } {
+): { begin: (workspaceId?: string, groupId?: string) => void, dispose: () => void } {
   let disposed = false
   let request: AbortController | undefined
   let selected = sessions.list.getSnapshot().current
@@ -31,18 +31,19 @@ export function createNewSessionAction(
   })
 
   return {
-    begin(workspaceId) {
+    begin(workspaceId, groupId) {
       cancel()
+      const start = (id?: string): void => groupId === undefined ? draft.begin(id) : draft.begin(id, groupId)
       if (disposed || draft.getSnapshot().phase === 'creating')
         return
       if (workspaceId !== undefined) {
-        draft.begin(workspaceId)
+        start(workspaceId)
         return
       }
       const current = sessions.list.getSnapshot().current
       const state = draft.getSnapshot()
       if (current === undefined) {
-        draft.begin(state.active ? state.targetId : undefined)
+        start(state.active ? state.targetId : undefined)
         return
       }
       const core = workspaces.list.getSnapshot()
@@ -52,7 +53,7 @@ export function createNewSessionAction(
       }
       const owner = core.items.find(item => item.sessionIds.includes(current))
       if (!owner) {
-        draft.begin()
+        start()
         return
       }
       // 核心列表决定归属，附加描述只用于区分项目与独立对话的存储工作区
@@ -67,7 +68,7 @@ export function createNewSessionAction(
           return
         }
         const description = registry.items.find(item => item.workspaceId === owner.workspaceId)
-        draft.begin(description?.kind === 'chat' ? undefined : owner.workspaceId)
+        start(description?.kind === 'chat' ? undefined : owner.workspaceId)
       }).catch((cause: unknown) => {
         if (!disposed && request === pending)
           notify(`无法确认新会话的工作区，请重试：${cause instanceof Error ? cause.message : String(cause)}`)

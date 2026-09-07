@@ -1,4 +1,5 @@
 import type { DraftSession } from './draft-session.ts'
+import type { LayoutStore } from './layout.ts'
 import type { ModeStore } from './mode.ts'
 import type { NativeEntry, NativeInput } from './native-compat.ts'
 import type { HostWorkspacePickerProps } from './target-picker.ts'
@@ -42,6 +43,7 @@ export function createDraftComposer(
   sessions: DraftHostSessions,
   workspaces: WorkspaceService,
   conversation: DraftHostConversation,
+  layout?: LayoutStore,
 ): DraftComposer {
   const { Shell, Root } = createNativeComposer(require)
   const options = createDraftOptions()
@@ -49,12 +51,26 @@ export function createDraftComposer(
   const IntentChip = createDraftIntentChip(React)
   const nativeCommands = createNativeCommandUI(require, key => (ctx as { get: (name: string) => any }).get('locale').bind('permission.access')(key))
   let commands: ReturnType<typeof createDraftCommands>
+  let input: NativeInput
   let composerElement: HTMLElement | null = null
   let adopting: string | undefined
   let transferredImages: readonly string[] = []
   let disposed = false
   const draft = createDraftSession({
     clearSelection: () => sessions.clear(),
+    hasContent: () => !!input.snapshot.draft || input.snapshot.imageIds.length > 0,
+    discard() {
+      const ids = [...input.snapshot.imageIds]
+      input.commitSend(ids)
+      input.notices.set(null)
+      ids.forEach(id => conversation.releaseDraftImage(id))
+      options.reset()
+      commands.close()
+    },
+    created(sessionId, groupId) {
+      if (groupId)
+        layout?.assignGroup(sessionId, groupId, true)
+    },
     async allocate(creationId) {
       const result = await runOperation({ op: 'create-chat', creationId }, AbortSignal.timeout(15000))
       const id = (result.chat as { workspaceId?: string } | undefined)?.workspaceId
@@ -126,7 +142,7 @@ export function createDraftComposer(
       }
     },
   })
-  const input = new Shell({
+  input = new Shell({
     actx: ctx,
     inputTriggers: () => commands,
     popup: () => commands?.popup,
@@ -143,13 +159,13 @@ export function createDraftComposer(
   commands = createDraftCommands(nativeCommands, options, input, () => readNativeClientCommands(ctx), () => composerElement?.querySelector('textarea')?.focus())
   const e = React.createElement
   const begin = draft.begin
-  draft.begin = (targetId) => {
+  draft.begin = (targetId, groupId) => {
     commands.close()
     if (draft.getSnapshot().phase === 'created') {
       input.notices.set(null)
       options.reset()
     }
-    begin(targetId)
+    begin(targetId, groupId)
   }
 
   function DraftActions(): unknown {
@@ -166,12 +182,6 @@ export function createDraftComposer(
           onClick: () => {
             if (!draft.discard())
               return
-            const ids = [...input.snapshot.imageIds]
-            input.commitSend(ids)
-            input.notices.set(null)
-            ids.forEach(id => conversation.releaseDraftImage(id))
-            options.reset()
-            commands.close()
             setConfirm(false)
           },
         }, '丢弃草稿'), e(IconButton, { icon: 'close', label: '保留草稿', onClick: () => setConfirm(false) }))
@@ -331,7 +341,7 @@ export function createDraftComposer(
           parts.push(extendNewSession(workspaces, newSession.begin))
           undo = () => parts.reverse().forEach(off => off())
           if (resumeDraft || sessions.list.getSnapshot().current === undefined)
-            draft.begin(draft.getSnapshot().targetId)
+            draft.begin(draft.getSnapshot().targetId, draft.getSnapshot().displayGroupId)
           resumeDraft = false
         }
         catch (cause) {
@@ -352,7 +362,7 @@ export function createDraftComposer(
           draft.suspend()
         }
         else if (current === undefined && mode.getSnapshot().mode === 'space' && !draft.getSnapshot().active) {
-          draft.begin(draft.getSnapshot().targetId)
+          draft.begin(draft.getSnapshot().targetId, draft.getSnapshot().displayGroupId)
         }
       }))
       disposers.push(draft.subscribe(() => {

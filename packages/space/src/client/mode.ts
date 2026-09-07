@@ -1,5 +1,6 @@
 import type { ReactLike, SlotProps, SlotsService } from './types.ts'
-import { createControls } from './controls.ts'
+import { createControls, tooltipProps } from './controls.ts'
+import { installModalFocus } from './modal-focus.ts'
 
 export type SidebarMode = 'space' | 'official'
 const MODE_KEY = 'dsh-space.sidebar.mode'
@@ -101,17 +102,21 @@ export function installSidebarMode(
         style.dataset.plugin = 'dsh-space'
         style.textContent = css
         document.head.append(style)
+        let releaseFocus = (): void => {}
         try {
+          releaseFocus = installModalFocus()
           const unregister = slots.register(
             { name: 'sidebar.workspaces', priority: -10 },
             Sidebar,
           )
           dispose = () => {
             unregister()
+            releaseFocus()
             style.remove()
           }
         }
         catch (error) {
+          releaseFocus()
           style.remove()
           throw error
         }
@@ -169,9 +174,9 @@ export function createModeControl(
             'key': value,
             'aria-pressed': state.mode === value,
             'aria-label': `切换到${value === 'official' ? '官方' : '空间'}模式`,
-            'title': state.blocked
+            ...tooltipProps(state.blocked
               ? '请先完成或关闭当前操作'
-              : `切换到${value === 'official' ? '官方' : '空间'}模式`,
+              : `切换到${value === 'official' ? '官方' : '空间'}模式`),
             'disabled': state.blocked,
             'onClick': () => mode.setMode(value),
             'style': {

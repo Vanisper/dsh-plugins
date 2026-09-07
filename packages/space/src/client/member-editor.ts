@@ -1,5 +1,5 @@
 import type { MemberItem, ReactLike } from './types.ts'
-import { createControls } from './controls.ts'
+import { createControls, tooltipProps } from './controls.ts'
 import { createImeGuard } from './ime.ts'
 
 export interface MemberDraft {
@@ -143,7 +143,7 @@ export function createMemberEditor(
                   member.path === draft.primary
                     ? '当前主成员'
                     : `将 ${memberLabel(member)} 设为主要`,
-                'title': member.path === draft.primary ? '当前主成员' : '设为主要',
+                ...tooltipProps(member.path === draft.primary ? '当前主成员' : '设为主要'),
                 'checked': member.path === draft.primary,
                 'onChange': () => selectPrimary(member.path),
               }),

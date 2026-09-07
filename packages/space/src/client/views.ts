@@ -1,6 +1,7 @@
 import type { DisplayGroup, SidebarLayout } from './layout.ts'
 import type { SessionBuckets, SessionView } from './model.ts'
 import type { RegistryItem, SessionSnapshot, WorkspaceSnapshot } from './types.ts'
+import { groupKey, sortList } from './layout.ts'
 
 export interface SessionEntry {
   session: SessionView
@@ -8,7 +9,7 @@ export interface SessionEntry {
 }
 
 /** 只重排项目内的会话快照，项目顺序始终使用核心注册表 */
-export function sortWorkspaces(items: RegistryItem[], buckets: SessionBuckets, sort: SidebarLayout['workspaceSort']): { items: RegistryItem[], buckets: SessionBuckets } {
+export function sortWorkspaces(items: RegistryItem[], buckets: SessionBuckets, sort: 'manual' | 'updated'): { items: RegistryItem[], buckets: SessionBuckets } {
   if (sort === 'manual')
     return { items, buckets }
   return {
@@ -37,14 +38,11 @@ export function projectGroups(items: RegistryItem[], buckets: SessionBuckets, la
     byId.delete(pin.id)
     return [entry]
   })
-  const entries = sortSessions([...byId.values()], 'updated')
-  if (layout.sessionSort === 'manual') {
-    const order = new Map(layout.groupSessionOrder.map((id, index) => [id, index]))
-    entries.sort((a, b) => (order.get(a.session.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.session.id) ?? Number.MAX_SAFE_INTEGER))
-  }
-  const groups = layout.groups.map(group => ({ group, entries: entries.filter(entry => layout.assignments[entry.session.id] === group.id) }))
+  const entries = [...byId.values()]
+  const sorted = (rows: SessionEntry[], id?: string): SessionEntry[] => sortList(rows, layout, groupKey(id), entry => entry.session.id, entry => entry.session.updatedAt)
+  const groups = layout.groups.map(group => ({ group, entries: sorted(entries.filter(entry => layout.assignments[entry.session.id] === group.id), group.id) }))
   const ids = new Set(layout.groups.map(group => group.id))
-  return { pinned, groups, ungrouped: entries.filter(entry => !ids.has(layout.assignments[entry.session.id]!)) }
+  return { pinned: sortList(pinned, layout, 'groups:pinned', entry => `session:${entry.session.id}`, entry => entry.session.updatedAt), groups, ungrouped: sorted(entries.filter(entry => !ids.has(layout.assignments[entry.session.id]!))) }
 }
 
 /** 归档列表以核心归档集合为准，缺失摘要单独报告 */

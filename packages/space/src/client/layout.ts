@@ -2,8 +2,9 @@ import type { SessionBuckets, SessionView } from './model.ts'
 import type { RegistryItem } from './types.ts'
 import { moveBefore } from './session-order.ts'
 
-export const SECTION_IDS = ['pinned', 'chats', 'workspaces'] as const
+export const SECTION_IDS = ['pinned', 'chats', 'workspaces', 'misc'] as const
 export type SectionId = typeof SECTION_IDS[number]
+export type FlatSectionId = 'chats' | 'misc'
 export interface Pin {
   kind: 'workspace' | 'session'
   id: string
@@ -11,6 +12,11 @@ export interface Pin {
 export const GROUP_COLORS = { gray: '灰色', red: '红色', orange: '橙色', yellow: '黄色', green: '绿色', blue: '蓝色', purple: '紫色' } as const
 export type GroupColor = keyof typeof GROUP_COLORS
 export type SidebarView = 'workspaces' | 'groups'
+export type SortMode = 'updated' | 'manual'
+export type ListKey = `project:${SectionId}` | 'groups:pinned' | 'groups:sessions' | `group:${string}`
+export const projectKey = (section: SectionId): ListKey => `project:${section}`
+export const groupKey = (id?: string): ListKey => id ? `group:${id}` : 'groups:sessions'
+export const pinKey = (pin: Pin): string => `${pin.kind}:${pin.id}`
 export interface DisplayGroup {
   id: string
   title: string
@@ -22,10 +28,10 @@ export interface SidebarLayout {
   sections: SectionId[]
   collapsed: SectionId[]
   view: SidebarView
-  /** 项目视图内的会话排序，不参与项目顺序 */
-  workspaceSort: 'manual' | 'updated'
-  sessionSort: 'updated' | 'manual'
-  groupSessionOrder: string[]
+  /** 按视图与大组隔离；项目行仍沿用核心手动顺序 */
+  sorts: Partial<Record<ListKey, SortMode>>
+  orders: Partial<Record<ListKey, string[]>>
+  foldedLists: ListKey[]
   groups: DisplayGroup[]
   assignments: Record<string, string>
 }
@@ -35,24 +41,35 @@ export interface LayoutStore {
   setPinned: (pin: Pin, pinned: boolean) => void
   setCollapsed: (section: SectionId, collapsed: boolean) => void
   moveSection: (section: SectionId, before?: SectionId) => void
-  movePin: (pin: Pin, before?: Pin) => void
+  movePin: (pin: Pin, before?: Pin, view?: SidebarView, order?: Pin[]) => void
   setView: (view: SidebarView) => void
-  setSort: (sort: Partial<Pick<SidebarLayout, 'workspaceSort' | 'sessionSort'>>) => void
+  setListSort: (key: ListKey, sort: SortMode) => void
+  setListCollapsed: (key: ListKey, collapsed: boolean) => void
   saveGroup: (group: DisplayGroup, create?: boolean, expected?: DisplayGroup) => void
   setGroupCollapsed: (id: string, collapsed: boolean) => void
   deleteGroup: (id: string) => void
-  assignGroup: (sessionId: string, groupId?: string) => void
+  assignGroup: (sessionId: string, groupId?: string, ifPresent?: boolean) => void
   moveGroup: (id: string, before?: string) => void
   moveGroupSession: (input: { id: string, before?: string, groupId?: string, order: string[] }) => void
+  moveFlatSession: (input: { section: FlatSectionId, id: string, before?: string, order: string[] }) => void
 }
 export type LayoutEntry
   = | { kind: 'workspace', item: RegistryItem, rows: SessionView[] }
     | { kind: 'session', session: SessionView, item?: RegistryItem }
 
 const STORAGE_KEY = 'dsh-space.sidebar.layout'
-const defaults = (): SidebarLayout => ({ pins: [], sections: [...SECTION_IDS], collapsed: [], view: 'workspaces', workspaceSort: 'updated', sessionSort: 'updated', groupSessionOrder: [], groups: [], assignments: {} })
+const defaults = (): SidebarLayout => ({ pins: [], sections: [...SECTION_IDS], collapsed: [], view: 'workspaces', sorts: {}, orders: {}, foldedLists: [], groups: [], assignments: {} })
 const samePin = (a: Pin, b: Pin): boolean => a.kind === b.kind && a.id === b.id
 const isSection = (value: unknown): value is SectionId => SECTION_IDS.includes(value as SectionId)
+const decodeOrder = (value: unknown): string[] => [...new Set((Array.isArray(value) ? value : []).filter((id): id is string => typeof id === 'string' && !!id))]
+const isListKey = (key: string): key is ListKey => SECTION_IDS.some(id => key === projectKey(id)) || key === 'groups:pinned' || key === 'groups:sessions' || (key.startsWith('group:') && key.length > 6)
+export const listSort = (layout: Pick<SidebarLayout, 'sorts'>, key: ListKey): SortMode => layout.sorts[key] ?? 'updated'
+
+/** 手动模式保留已知顺序，新条目按更新时间补在后面 */
+export function sortList<T>(rows: T[], layout: Pick<SidebarLayout, 'sorts' | 'orders'>, key: ListKey, id: (row: T) => string, updated: (row: T) => number): T[] {
+  const order = new Map((listSort(layout, key) === 'manual' ? layout.orders[key] ?? [] : []).map((id, index) => [id, index]))
+  return [...rows].sort((a, b) => (order.get(id(a)) ?? Infinity) - (order.get(id(b)) ?? Infinity) || updated(b) - updated(a))
+}
 
 function decode(raw: string | null): SidebarLayout {
   try {
@@ -73,6 +90,32 @@ function decode(raw: string | null): SidebarLayout {
       }
     }
     const assignments = Object.fromEntries(Object.entries(data.assignments && typeof data.assignments === 'object' && !Array.isArray(data.assignments) ? data.assignments : {}).filter(([id, groupId]) => id && groups.some(group => group.id === groupId))) as Record<string, string>
+    const sorts: SidebarLayout['sorts'] = {}
+    const orders: SidebarLayout['orders'] = {}
+    // 旧共享偏好只在迁移时复制，之后各组独立写入
+    if (!data.sorts) {
+      for (const section of SECTION_IDS)
+        sorts[projectKey(section)] = section === 'pinned' ? 'manual' : data.workspaceSort === 'manual' ? 'manual' : 'updated'
+      for (const key of ['groups:sessions', ...groups.map(group => groupKey(group.id))] as ListKey[])
+        sorts[key] = data.sessionSort === 'manual' ? 'manual' : 'updated'
+      sorts['groups:pinned'] = 'manual'
+      orders['project:pinned'] = pins.map(pinKey)
+      orders['groups:pinned'] = pins.filter(pin => pin.kind === 'session').map(pinKey)
+      orders['project:chats'] = decodeOrder(data.flatSessionOrder?.chats)
+      orders['project:misc'] = decodeOrder(data.flatSessionOrder?.misc)
+      for (const key of ['groups:sessions', ...groups.map(group => groupKey(group.id))] as ListKey[])
+        orders[key] = decodeOrder(data.groupSessionOrder).filter(id => groupKey(assignments[id]) === key)
+    }
+    else {
+      for (const [key, value] of Object.entries(data.sorts)) {
+        if (isListKey(key) && (value === 'manual' || value === 'updated'))
+          sorts[key] = value
+      }
+      for (const [key, value] of Object.entries(data.orders ?? {})) {
+        if (isListKey(key))
+          orders[key] = decodeOrder(value)
+      }
+    }
     return {
       pins,
       sections: [...new Set([...sections, ...SECTION_IDS])],
@@ -80,9 +123,9 @@ function decode(raw: string | null): SidebarLayout {
       groups,
       assignments,
       view: data.view === 'groups' ? 'groups' : 'workspaces',
-      workspaceSort: data.workspaceSort === 'manual' ? 'manual' : 'updated',
-      sessionSort: data.sessionSort === 'manual' ? 'manual' : 'updated',
-      groupSessionOrder: [...new Set((Array.isArray(data.groupSessionOrder) ? data.groupSessionOrder : []).filter((id: unknown) => typeof id === 'string' && id))] as string[],
+      sorts,
+      orders,
+      foldedLists: decodeOrder(data.foldedLists).filter(isListKey),
     }
   }
   catch {
@@ -158,18 +201,21 @@ export function createLayoutStore(): LayoutStore {
         return { ...value, sections }
       })
     },
-    movePin(pin: Pin, before?: Pin): void {
+    movePin(pin: Pin, before?: Pin, view = 'workspaces', order?: Pin[]): void {
       change((value) => {
         if (!value.pins.some(item => samePin(item, pin)) || (before && samePin(pin, before)))
           return value
-        const pins = value.pins.filter(item => !samePin(item, pin))
-        const index = before ? pins.findIndex(item => samePin(item, before)) : -1
-        pins.splice(index < 0 ? pins.length : index, 0, pin)
-        return { ...value, pins }
+        const key: ListKey = view === 'groups' ? 'groups:pinned' : 'project:pinned'
+        const ids = (order ?? value.pins).map(pinKey)
+        const next = moveBefore(ids, pinKey(pin), before ? pinKey(before) : undefined)
+        if (next.every((id, index) => id === ids[index]))
+          return value
+        return { ...value, orders: { ...value.orders, [key]: next }, sorts: pin.kind === 'session' ? { ...value.sorts, [key]: 'manual' } : value.sorts }
       })
     },
     setView: view => change(value => ({ ...value, view })),
-    setSort: sort => change(value => ({ ...value, ...sort })),
+    setListSort: (key, sort) => change(value => ({ ...value, sorts: { ...value.sorts, [key]: sort } })),
+    setListCollapsed: (key, collapsed) => change(value => ({ ...value, foldedLists: collapsed ? [...new Set([...value.foldedLists, key])] : value.foldedLists.filter(id => id !== key) })),
     saveGroup(group, create = false, expected): void {
       change((value) => {
         const exists = value.groups.some(item => item.id === group.id)
@@ -195,10 +241,13 @@ export function createLayoutStore(): LayoutStore {
     deleteGroup(id): void {
       change(value => ({ ...value, groups: value.groups.filter(group => group.id !== id), assignments: Object.fromEntries(Object.entries(value.assignments).filter(([, groupId]) => groupId !== id)) }))
     },
-    assignGroup(sessionId, groupId): void {
+    assignGroup(sessionId, groupId, ifPresent): void {
       change((value) => {
-        if (groupId && !value.groups.some(group => group.id === groupId))
+        if (groupId && !value.groups.some(group => group.id === groupId)) {
+          if (ifPresent)
+            return value
           throw new Error('目标分组已被移除')
+        }
         const assignments = Object.fromEntries(Object.entries(value.assignments).filter(([id]) => id !== sessionId))
         if (groupId)
           Object.defineProperty(assignments, sessionId, { value: groupId, enumerable: true, configurable: true, writable: true })
@@ -218,7 +267,7 @@ export function createLayoutStore(): LayoutStore {
     },
     moveGroupSession({ id, before, groupId, order }): void {
       change((value) => {
-        if (value.sessionSort !== 'manual' || id === before)
+        if (id === before || (before && !order.includes(before)))
           return value
         if (groupId && !value.groups.some(group => group.id === groupId))
           throw new Error('目标分组已被移除')
@@ -226,14 +275,29 @@ export function createLayoutStore(): LayoutStore {
         delete assignments[id]
         if (groupId)
           Object.defineProperty(assignments, id, { value: groupId, enumerable: true, configurable: true, writable: true })
-        return { ...value, assignments, groupSessionOrder: moveBefore([...new Set([...value.groupSessionOrder, ...order])], id, before) }
+        const key = groupKey(groupId)
+        const next = moveBefore(order.includes(id) ? order : [...order, id], id, before)
+        if (value.assignments[id] === groupId && next.every((id, index) => id === order[index]))
+          return value
+        return { ...value, assignments, sorts: { ...value.sorts, [key]: 'manual' }, orders: { ...value.orders, [key]: next } }
+      })
+    },
+    moveFlatSession({ section, id, before, order }): void {
+      change((value) => {
+        if (!order.includes(id) || (before && !order.includes(before)))
+          return value
+        const next = moveBefore(order, id, before)
+        if (next.every((id, index) => id === order[index]))
+          return value
+        const key = projectKey(section)
+        return { ...value, sorts: { ...value.sorts, [key]: 'manual' }, orders: { ...value.orders, [key]: next } }
       })
     },
   }
 }
 
 /** 从已过滤的核心分组生成唯一展示位置，过期置顶引用不产生条目 */
-export function projectLayout(items: RegistryItem[], buckets: SessionBuckets, pins: Pin[]): Record<SectionId, LayoutEntry[]> {
+export function projectLayout(items: RegistryItem[], buckets: SessionBuckets, pins: Pin[], preferences: Pick<SidebarLayout, 'sorts' | 'orders'> = defaults()): Record<SectionId, LayoutEntry[]> {
   const sessions = new Map<string, Extract<LayoutEntry, { kind: 'session' }>>()
   for (const item of items) {
     for (const session of buckets.rows.get(item.workspaceId) ?? [])
@@ -247,7 +311,7 @@ export function projectLayout(items: RegistryItem[], buckets: SessionBuckets, pi
     item,
     rows: (buckets.rows.get(item.workspaceId) ?? []).filter(row => !pinnedSessions.has(row.id)),
   }]))
-  const result: Record<SectionId, LayoutEntry[]> = { pinned: [], chats: [], workspaces: [] }
+  const result: Record<SectionId, LayoutEntry[]> = { pinned: [], chats: [], workspaces: [], misc: [] }
   for (const pin of pins) {
     const entry = pin.kind === 'workspace' ? workspaces.get(pin.id) : sessions.get(pin.id)
     if (!entry)
@@ -259,7 +323,20 @@ export function projectLayout(items: RegistryItem[], buckets: SessionBuckets, pi
       sessions.delete(pin.id)
   }
   result.workspaces = [...workspaces.values()]
-  result.chats = [...sessions.values()].filter(entry => entry.item?.kind === 'chat').sort((a, b) => b.session.updatedAt - a.session.updatedAt)
+  for (const section of ['workspaces', 'pinned'] as const) {
+    for (const entry of result[section]) {
+      if (entry.kind === 'workspace' && listSort(preferences, projectKey(section)) === 'updated')
+        entry.rows = [...entry.rows].sort((a, b) => b.updatedAt - a.updatedAt)
+    }
+  }
+  const pinOrder = new Map((preferences.orders['project:pinned'] ?? []).map((id, index) => [id, index]))
+  result.pinned.sort((a, b) => (pinOrder.get(a.kind === 'workspace' ? `workspace:${a.item.workspaceId}` : `session:${a.session.id}`) ?? Infinity) - (pinOrder.get(b.kind === 'workspace' ? `workspace:${b.item.workspaceId}` : `session:${b.session.id}`) ?? Infinity))
+  const sortedPins = sortList(result.pinned.filter((entry): entry is Extract<LayoutEntry, { kind: 'session' }> => entry.kind === 'session'), preferences, 'project:pinned', entry => `session:${entry.session.id}`, entry => entry.session.updatedAt)
+  let pinIndex = 0
+  result.pinned = result.pinned.map(entry => entry.kind === 'session' ? sortedPins[pinIndex++]! : entry)
+  for (const section of ['chats', 'misc'] as const) {
+    result[section] = sortList([...sessions.values()].filter(entry => section === 'chats' ? entry.item?.kind === 'chat' : !entry.item), preferences, projectKey(section), entry => entry.session.id, entry => entry.session.updatedAt)
+  }
   return result
 }
 

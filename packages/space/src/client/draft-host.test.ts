@@ -1,8 +1,10 @@
 import type { DraftHostConversation, DraftHostSessions } from './draft-host.ts'
+import type { LayoutStore } from './layout.ts'
 import type { ReactLike, SessionSnapshot, SlotsService, WorkspaceService } from './types.ts'
 import * as React from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDraftComposer } from './draft-host.ts'
+import { createLayoutStore } from './layout.ts'
 import { createNativeComposer } from './native-compat.ts'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -17,7 +19,7 @@ function store<T>(state: T) {
   }
 }
 
-function harness() {
+function harness(layout?: LayoutStore) {
   const snapshot: SessionSnapshot = { ids: [], byId: {}, phase: 'ready' }
   const require = (name: string): unknown => name === '@deepseek-ai/dsh-client-runtime/client' ? { createSnapshotStore: store } : {}
   const { Shell } = createNativeComposer(require)
@@ -41,13 +43,48 @@ function harness() {
   }
   const block = store<{ reason: string } | undefined>(undefined)
   const workspaces = { refresh: vi.fn(async () => {}), list: store({ items: [{ workspaceId: 'project', sessionIds: snapshot.ids }] }) }
-  const conversation = { input: { for: () => target }, blocks: { storeFor: () => block } }
+  const conversation = { input: { for: () => target }, blocks: { storeFor: () => block }, releaseDraftImage: vi.fn() }
   const ctx = { get: () => ({ live: { contributions: new Map() } }) }
-  const composer = createDraftComposer(React as unknown as ReactLike, require, ctx, {} as SlotsService, sessions as unknown as DraftHostSessions, workspaces as unknown as WorkspaceService, conversation as unknown as DraftHostConversation)
-  return { composer, sessions, target, send, block, command }
+  const composer = createDraftComposer(React as unknown as ReactLike, require, ctx, {} as SlotsService, sessions as unknown as DraftHostSessions, workspaces as unknown as WorkspaceService, conversation as unknown as DraftHostConversation, layout)
+  return { composer, sessions, target, send, block, command, conversation }
 }
 
 describe('原生草稿接入宿主', () => {
+  it('从侧栏丢弃草稿也清空输入和附件，释放附件但不删除真实实体', () => {
+    const h = harness()
+    h.composer.draft.begin('project', 'g')
+    expect(h.composer.draft.hasContent()).toBe(false)
+    h.composer.input.setDraft('pending')
+    h.composer.input.addImages(['image'])
+    expect(h.composer.draft.hasContent()).toBe(true)
+    expect(h.composer.draft.discard()).toBe(true)
+    expect(h.composer.draft.hasContent()).toBe(false)
+    expect(h.composer.input.snapshot).toMatchObject({ draft: '', imageIds: [] })
+    expect(h.composer.draft.getSnapshot()).toEqual({ active: true, phase: 'editing', targetId: 'project' })
+    expect(h.conversation.releaseDraftImage).toHaveBeenCalledExactlyOnceWith('image')
+    expect(h.sessions.create).not.toHaveBeenCalled()
+    h.composer.input.dispose()
+    h.target.dispose()
+  })
+  it.each([false, true])('首次创建绑定发起分组，分组已删除时不复活且不阻断交付：%s', async (deleted) => {
+    const layout = createLayoutStore()
+    layout.saveGroup({ id: 'g', title: '计划', color: 'gray', collapsed: false }, true)
+    const h = harness(layout)
+    h.block.set({ reason: 'choose model' })
+    h.composer.draft.begin('project', 'g')
+    expect(layout.getSnapshot().assignments).toEqual({})
+    if (deleted)
+      layout.deleteGroup('g')
+    h.composer.input.setDraft('pending')
+    h.composer.input.submit()
+    await vi.waitFor(() => expect(h.composer.draft.getSnapshot().phase).toBe('created'))
+    const id = h.composer.draft.getSnapshot().sessionId!
+    expect(layout.getSnapshot().assignments[id]).toBe(deleted ? undefined : 'g')
+    expect(h.sessions.create).toHaveBeenCalledTimes(1)
+    expect(h.target.snapshot.draft).toBe('pending')
+    h.composer.input.dispose()
+    h.target.dispose()
+  })
   it('目标意图在交付时才编码，创建失败保留纯正文，重试不叠加命令或开启 Plan', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ current: null, groups: [], failures: [], commands: [{ name: 'goal', description: 'Goal' }] }) })))
     const h = harness()

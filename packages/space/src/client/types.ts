@@ -149,6 +149,7 @@ export interface ReactLike {
 
 /** 宿主公开组件，保持状态与模态操作的原生外观 */
 export interface SidebarPrimitives {
+  Toast: (props: { text: string, icon?: unknown, anchor?: HTMLElement | null, onDone: () => void }) => unknown
   StateDot: (props: { state: 'ongoing' | 'warning' | 'done', size?: number }) => unknown
   Modal: (props: { open: boolean, title: string, closeLabel: string, onClose: () => void, footer?: unknown, children?: unknown }) => unknown
   Button: (props: { variant: 'outline' | 'primary', disabled?: boolean, onClick: () => void, children?: unknown }) => unknown

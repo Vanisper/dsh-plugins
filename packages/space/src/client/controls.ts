@@ -15,6 +15,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitFork,
+  Hand,
   Hash,
   Info,
   Layers,
@@ -23,6 +24,7 @@ import {
   LoaderCircle,
   Maximize2,
   MessageCircle,
+  MessageCirclePlus,
   Minimize2,
   Pencil,
   Pin,
@@ -46,6 +48,7 @@ const icons = {
   restore: ArchiveRestore,
   clock: Clock,
   hash: Hash,
+  hand: Hand,
   filter: ListFilter,
   expand: Maximize2,
   collapse: Minimize2,
@@ -71,6 +74,7 @@ const icons = {
   settings: Settings2,
   chat: SquarePen,
   message: MessageCircle,
+  newMessage: MessageCirclePlus,
   external: ArrowUpRight,
   remove: Trash2,
   close: X,
@@ -103,6 +107,7 @@ interface MenuProps {
   actions: MenuAction[]
   disabled?: boolean
   icon?: IconName
+  badge?: IconName
 }
 interface ModalProps {
   title: string
@@ -123,6 +128,64 @@ interface Controls {
   IconButton: (props: ButtonProps) => unknown
   Menu: (props: MenuProps) => unknown
   Modal: (props: ModalProps) => unknown
+}
+
+export const hasOpenMenu = (): boolean => !!document.querySelector('.dsh-space-menu-backdrop')
+let hint: HTMLElement | undefined
+let hintTimer: ReturnType<typeof setTimeout> | undefined
+let quietFocus = false
+function hideHint(): void {
+  clearTimeout(hintTimer)
+  hint?.remove()
+  hint = undefined
+}
+
+/** 自动聚焦和焦点恢复不触发提示，主动悬停及键盘聚焦仍保留提示 */
+export function withoutFocusHint(action: () => void): void {
+  const previous = quietFocus
+  quietFocus = true
+  hideHint()
+  try {
+    action()
+  }
+  finally {
+    quietFocus = previous
+  }
+}
+
+/** 使用顶层提示，避免侧栏滚动容器裁切或触发浏览器原生提示 */
+export function tooltipProps(label: string): Record<string, unknown> {
+  const show = (event: { currentTarget: HTMLElement }): void => {
+    hideHint()
+    const anchor = event.currentTarget
+    hintTimer = setTimeout(() => {
+      if (!anchor.isConnected || hasOpenMenu())
+        return
+      const node = document.createElement('div')
+      node.textContent = label
+      node.setAttribute('role', 'tooltip')
+      node.setAttribute('popover', 'manual')
+      node.style.cssText = 'position:fixed;inset:auto;margin:0;padding:5px 8px;border:0;border-radius:6px;background:#292a2d;color:#fff;font:12px/1.5 system-ui,sans-serif;max-width:240px;overflow-wrap:anywhere;pointer-events:none;box-shadow:0 2px 8px #0002;'
+      ;(anchor.closest('dialog, [role="dialog"]') ?? document.body).append(node)
+      node.showPopover()
+      const rect = anchor.getBoundingClientRect()
+      const size = node.getBoundingClientRect()
+      node.style.left = `${Math.max(8, Math.min(rect.left + (rect.width - size.width) / 2, innerWidth - size.width - 8))}px`
+      node.style.top = `${rect.bottom + size.height + 8 > innerHeight ? Math.max(8, rect.top - size.height - 6) : rect.bottom + 6}px`
+      hint = node
+    }, 450)
+  }
+  return {
+    onPointerEnter: show,
+    onPointerLeave: hideHint,
+    onFocus: (event: { currentTarget: HTMLElement }) => {
+      if (!quietFocus)
+        show(event)
+    },
+    onBlur: hideHint,
+    onPointerDown: hideHint,
+    onClickCapture: hideHint,
+  }
 }
 
 export function createControls(React: ReactLike): Controls {
@@ -168,7 +231,7 @@ export function createControls(React: ReactLike): Controls {
       {
         'type': 'button',
         'className': `dsh-space-icon ${className}`,
-        'title': label,
+        ...tooltipProps(label),
         'aria-label': label,
         'disabled': disabled,
         onClick,
@@ -181,12 +244,19 @@ export function createControls(React: ReactLike): Controls {
     actions,
     disabled,
     icon = 'more',
+    badge,
   }: MenuProps): unknown {
     const panel = React.useRef<HTMLDivElement | null>(null)
     const trigger = React.useRef<HTMLButtonElement | null>(null)
+    const backdrop = React.useRef<HTMLDivElement | null>(null)
     const [open, setOpen] = React.useState(false)
+    const clearBackdrop = (): void => {
+      backdrop.current?.remove()
+      backdrop.current = null
+    }
     const close = (): void => {
       panel.current?.hidePopover()
+      clearBackdrop()
       setOpen(false)
     }
     const show = (): void => {
@@ -199,13 +269,42 @@ export function createControls(React: ReactLike): Controls {
         return
       }
       const rect = button.getBoundingClientRect()
+      clearBackdrop()
+      // 拦截层先进入顶层，菜单在它上方；关闭时不会把首次点击交给背景控件
+      const shield = document.createElement('div')
+      shield.className = 'dsh-space-menu-backdrop'
+      shield.setAttribute('popover', 'manual')
+      shield.setAttribute('aria-hidden', 'true')
+      const stop = (event: Event): void => {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+      shield.addEventListener('pointerdown', stop)
+      shield.addEventListener('wheel', stop, { passive: false })
+      shield.addEventListener('touchmove', stop, { passive: false })
+      const dismiss = (event: Event): void => {
+        stop(event)
+        close()
+        withoutFocusHint(() => button.focus())
+      }
+      shield.addEventListener('click', dismiss)
+      shield.addEventListener('contextmenu', dismiss)
+      ;(button.closest('dialog, [role="dialog"]') ?? document.body).append(shield)
+      backdrop.current = shield
+      shield.showPopover()
+      hideHint()
+      window.dispatchEvent(new Event('dsh-space-menu-open'))
       menu.showPopover()
       const { height, width } = menu.getBoundingClientRect()
       menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`
       menu.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - height - 8))}px`
       setOpen(true)
-      menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+      withoutFocusHint(() => menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
     }
+    React.useEffect(() => () => {
+      clearBackdrop()
+      hideHint()
+    }, [])
     React.useEffect(() => {
       if (!open)
         return
@@ -226,13 +325,14 @@ export function createControls(React: ReactLike): Controls {
           'type': 'button',
           'className': 'dsh-space-icon dsh-space-menu-trigger',
           'aria-label': label,
-          'title': label,
+          ...tooltipProps(label),
           'aria-haspopup': 'menu',
           'aria-expanded': open,
           disabled,
           'onClick': show,
         },
         e(Icon, { name: icon }),
+        badge ? e('span', { className: 'dsh-space-sort-badge' }, e(Icon, { name: badge, size: 9 })) : null,
       ),
       e(
         'div',
@@ -242,8 +342,11 @@ export function createControls(React: ReactLike): Controls {
           'role': 'menu',
           'aria-label': label,
           'className': 'dsh-space-menu-panel',
-          'onToggle': (event: { newState: string }) =>
-            setOpen(event.newState === 'open'),
+          'onToggle': (event: { newState: string }) => {
+            setOpen(event.newState === 'open')
+            if (event.newState !== 'open')
+              clearBackdrop()
+          },
           'onKeyDown': (event: KeyboardEvent) => {
             const buttons = Array.from(
               panel.current?.querySelectorAll<HTMLButtonElement>(
@@ -269,7 +372,7 @@ export function createControls(React: ReactLike): Controls {
             }
             if (event.key === 'Escape' || event.key === 'Tab') {
               close()
-              trigger.current?.focus()
+              withoutFocusHint(() => trigger.current?.focus())
             }
           },
         },
@@ -288,7 +391,7 @@ export function createControls(React: ReactLike): Controls {
               'className': action.danger ? 'danger' : undefined,
               'onClick': () => {
                 close()
-                trigger.current?.focus()
+                withoutFocusHint(() => trigger.current?.focus())
                 action.run()
               },
             },
@@ -319,14 +422,18 @@ export function createControls(React: ReactLike): Controls {
     React.useEffect(() => {
       const previous = document.activeElement as HTMLElement | null
       const element = dialog.current!
-      element.showModal()
-      Array.from(element.querySelectorAll<HTMLElement>('input:not(:disabled), textarea:not(:disabled), select:not(:disabled)'))
-        .find(input => !input.closest('details:not([open])') && input.getClientRects().length > 0)
-        ?.focus()
+      withoutFocusHint(() => {
+        element.showModal()
+        Array.from(element.querySelectorAll<HTMLElement>('input:not(:disabled), textarea:not(:disabled), select:not(:disabled)'))
+          .find(input => !input.closest('details:not([open])') && input.getClientRects().length > 0)
+          ?.focus()
+      })
       return () => {
-        element.close()
-        if (previous?.isConnected)
-          previous.focus()
+        withoutFocusHint(() => {
+          element.close()
+          if (previous?.isConnected)
+            previous.focus()
+        })
       }
     }, [])
     return e(
@@ -336,6 +443,7 @@ export function createControls(React: ReactLike): Controls {
         'className': 'dsh-space-dialog',
         'aria-label': title,
         'aria-busy': busy,
+        'closedby': busy ? 'none' : 'closerequest',
         'onCancel': (event: Event) => {
           event.preventDefault()
           if (!busy && !ime.active())

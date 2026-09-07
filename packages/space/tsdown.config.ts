@@ -13,7 +13,7 @@ export default defineConfig([
   },
   {
     entry: ['src/client/client.ts'],
-    noExternal: ['lucide'],
+    noExternal: ['lucide', 'focus-trap', 'tabbable'],
     format: ['iife'],
     outputOptions: { entryFileNames: 'client.js' },
     platform: 'browser',

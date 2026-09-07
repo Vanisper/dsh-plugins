@@ -1,6 +1,6 @@
 import type { IconName } from './controls.ts'
 import type { ReactLike } from './types.ts'
-import { createControls } from './controls.ts'
+import { createControls, tooltipProps, withoutFocusHint } from './controls.ts'
 import { createImeGuard } from './ime.ts'
 
 interface DetailsProps {
@@ -67,7 +67,7 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
       }
       position()
       if (props.focus && !props.edit)
-        editButton.current?.focus()
+        withoutFocusHint(() => editButton.current?.focus())
       const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(position)
       observer?.observe(element)
       const outside = (event: PointerEvent): void => {
@@ -92,7 +92,7 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
         event.preventDefault()
         event.stopPropagation()
         latest.current.onClose()
-        anchor.focus()
+        withoutFocusHint(() => anchor.focus())
       }
       window.addEventListener('resize', position)
       window.addEventListener('scroll', position, true)
@@ -204,7 +204,7 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
                 ref: editButton,
                 type: 'button',
                 className: 'dsh-space-details-title',
-                title: '重命名',
+                ...tooltipProps('重命名'),
                 onClick: () => {
                   setDraft(title)
                   setEditing(true)

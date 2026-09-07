@@ -2,6 +2,7 @@ import type { DraftHostConversation, DraftHostSessions } from './draft-host.ts'
 import type { ReactLike, SidebarPrimitives, SlotsService, WorkspaceService } from './types.ts'
 import { createDraftComposer } from './draft-host.ts'
 import { draftCss } from './draft-styles.ts'
+import { createLayoutStore } from './layout.ts'
 import { createModeControl, createModeStore, installSidebarMode } from './mode.ts'
 import { assertNativeCompatibility } from './native-compat.ts'
 import { createSidebar } from './sidebar.ts'
@@ -52,9 +53,12 @@ loader?.load({
         const primitives = require('@deepseek-ai/dsh-client-ui-primitives') as SidebarPrimitives
         if (typeof primitives.StateDot !== 'function')
           throw new Error('宿主缺少 StateDot 状态组件')
-        const composer = createDraftComposer(React, require, ctx, slots, sessions, workspaces, conversation)
+        if (typeof primitives.Toast !== 'function')
+          throw new Error('宿主缺少 Toast 提示组件')
+        const layout = createLayoutStore()
+        const composer = createDraftComposer(React, require, ctx, slots, sessions, workspaces, conversation, layout)
         const WorkspacePicker = createHostWorkspacePicker(React, workspaces)
-        const Sidebar = createSidebar(React, sessions, workspaces, mode, composer.draft, primitives)
+        const Sidebar = createSidebar(React, sessions, workspaces, mode, composer.draft, primitives, layout)
         const ModeControl = createModeControl(React, mode)
         ctx.effect(() => {
           const disposers: Array<() => void> = []

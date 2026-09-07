@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
-import type { SlotsService } from './types.ts'
+import type { ReactLike, SlotsService } from './types.ts'
+import * as React from 'react'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createModeStore, installSidebarMode } from './mode.ts'
+import { createModeControl, createModeStore, installSidebarMode } from './mode.ts'
 
 afterEach(() => {
   localStorage.clear()
@@ -10,6 +13,41 @@ afterEach(() => {
 })
 
 describe('工作区模式生命周期', () => {
+  it('紧凑分段控件同步选中态与禁用态，窄栏只展示另一模式入口', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const mode = createModeStore()
+    const Control = createModeControl(React as unknown as ReactLike, mode) as React.ComponentType<{ wide: boolean }>
+    try {
+      await act(async () => root.render(createElement(Control, { wide: true })))
+      const buttons = [...host.querySelectorAll('button')]
+      expect(buttons.map(button => button.textContent)).toEqual(['官方', '空间'])
+      expect(buttons[1]!.getAttribute('aria-pressed')).toBe('true')
+      await act(async () => buttons[0]!.click())
+      expect(mode.getSnapshot().mode).toBe('official')
+      expect(buttons[0]!.getAttribute('aria-pressed')).toBe('true')
+      await act(async () => mode.setBlocked(true))
+      expect(buttons.every(button => button.disabled)).toBe(true)
+      await act(async () => buttons[1]!.click())
+      expect(mode.getSnapshot().mode).toBe('official')
+      await act(async () => {
+        mode.setBlocked(false)
+        root.render(createElement(Control, { wide: false }))
+      })
+      expect(host.querySelectorAll('button')).toHaveLength(1)
+      expect(host.querySelector('button')?.getAttribute('aria-label')).toBe('切换到空间模式')
+      expect(host.querySelector('button')?.textContent).toBe('')
+      await act(async () => host.querySelector('button')?.click())
+      expect(mode.getSnapshot().mode).toBe('space')
+    }
+    finally {
+      await act(async () => root.unmount())
+      host.remove()
+    }
+  })
+
   it('侧栏与会话草稿分别释放占用，不相互解锁', () => {
     const mode = createModeStore()
     mode.setBlocked(true)

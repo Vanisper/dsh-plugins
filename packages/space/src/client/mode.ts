@@ -140,16 +140,25 @@ export function createModeControl(
     return e(
       'div',
       {
-        'role': 'group',
-        'aria-label': '工作区显示模式',
-        'style': {
+        style: {
           display: 'flex',
-          gap: 2,
-          padding: wide ? '4px 8px' : '4px',
+          padding: wide ? '6px 12px' : '4px',
           justifyContent: 'center',
         },
       },
-      ...choices.map(value =>
+      e('div', {
+        'role': 'group',
+        'aria-label': '侧栏模式',
+        'style': {
+          display: 'flex',
+          gap: 2,
+          padding: 2,
+          width: wide ? '100%' : undefined,
+          maxWidth: 240,
+          borderRadius: 6,
+          background: wide ? 'var(--dsw-alias-interactive-bg-hover, #8882)' : 'transparent',
+        },
+      }, ...choices.map(value =>
         e(
           'button',
           {
@@ -166,27 +175,29 @@ export function createModeControl(
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: 6,
+              gap: 5,
               flex: wide ? 1 : undefined,
-              minHeight: 32,
-              width: wide ? undefined : 36,
-              border: '1px solid var(--dsw-alias-border-l2, #8884)',
-              borderRadius: 6,
+              height: 28,
+              width: wide ? undefined : 28,
+              padding: wide ? '0 8px' : 0,
+              border: 0,
+              borderRadius: 4,
               background:
                 state.mode === value
-                  ? 'var(--dsw-alias-interactive-bg-hover, #8882)'
+                  ? 'var(--dsw-alias-bg-layer-1, #fff)'
                   : 'transparent',
-              color: 'var(--dsw-alias-label-secondary, inherit)',
+              boxShadow: state.mode === value ? '0 1px 3px #00000012' : 'none',
+              color: state.mode === value ? 'var(--dsw-alias-label-primary, #242424)' : 'var(--dsw-alias-label-secondary, inherit)',
               font: 'inherit',
               fontSize: 12,
               cursor: state.blocked ? 'not-allowed' : 'pointer',
               opacity: state.blocked ? 0.5 : 1,
             },
           },
-          e(Icon, { name: value === 'official' ? 'folder' : 'layers' }),
-          wide ? `${value === 'official' ? '官方' : '空间'}模式` : null,
+          e(Icon, { name: value === 'official' ? 'folder' : 'layers', size: 14 }),
+          wide ? value === 'official' ? '官方' : '空间' : null,
         ),
-      ),
+      )),
     )
   }
 }

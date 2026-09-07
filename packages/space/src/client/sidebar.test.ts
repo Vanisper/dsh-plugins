@@ -14,6 +14,7 @@ import { createDraftSession } from './draft-session.ts'
 import { createLayoutStore } from './layout.ts'
 import { createModeStore } from './mode.ts'
 import { createSidebar } from './sidebar.ts'
+import { sidebarCss } from './styles.ts'
 
 const operation = vi.hoisted(() => vi.fn())
 const fixture = vi.hoisted(() => ({
@@ -166,7 +167,8 @@ async function mount(wide = true) {
 }
 
 function button(label: string): HTMLButtonElement {
-  const buttons = Array.from((document.querySelector('dialog') ?? document).querySelectorAll('button'))
+  const scope = document.querySelector('dialog') ?? document
+  const buttons = [...(scope.querySelector('.dsh-space-details')?.querySelectorAll('button') ?? []), ...scope.querySelectorAll('button')]
   const button = buttons.find(button => button.getAttribute('aria-label') === label) ?? buttons.find(button => button.textContent === label)
   if (!button)
     throw new Error(`找不到按钮 ${label}`)
@@ -196,6 +198,94 @@ async function registry(value: RegistryPayload | undefined): Promise<void> {
   fixture.registry = value
   await act(async () => fixture.receive?.(value, value ? undefined : 'offline'))
 }
+
+it('视图按分组、项目排列且默认选中项目，键盘顺序与视觉一致', async () => {
+  await mount()
+  const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+  expect(tabs.map(tab => tab.textContent)).toEqual(['分组', '项目'])
+  expect(tabs[1]!.getAttribute('aria-checked')).toBe('true')
+  await act(async () => tabs[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })))
+  expect(tabs[0]!.getAttribute('aria-checked')).toBe('true')
+  expect(document.activeElement).toBe(tabs[0])
+  await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
+  expect(tabs[1]!.getAttribute('aria-checked')).toBe('true')
+  expect(document.activeElement).toBe(tabs[1])
+  await act(async () => document.querySelector<HTMLButtonElement>('.dsh-space-head [role="menuitem"]')!.click())
+  expect([...document.querySelectorAll('.dsh-space-section-title')].map(node => node.textContent)).toEqual(['置顶', '对话', '项目'])
+})
+
+it('搜索同一行展开并聚焦，关闭清空筛选且恢复入口焦点', async () => {
+  await mount()
+  const wrap = document.querySelector('.dsh-space-search-wrap')!
+  const field = document.querySelector<HTMLInputElement>('.dsh-space-search')!
+  expect(wrap.hasAttribute('inert')).toBe(true)
+  await click('搜索')
+  expect(wrap.hasAttribute('inert')).toBe(false)
+  expect(document.querySelector('.dsh-space-view-toolbar')?.hasAttribute('inert')).toBe(true)
+  expect(document.activeElement).toBe(field)
+  await input('搜索项目或会话', '不匹配')
+  expect(document.querySelector('[data-section="workspaces"]')).toBeNull()
+  await click('关闭搜索')
+  expect(field.value).toBe('')
+  expect(wrap.hasAttribute('inert')).toBe(true)
+  expect(document.querySelector('[data-section="workspaces"]')).not.toBeNull()
+  expect(document.activeElement).toBe(button('搜索'))
+})
+
+it('大组折叠箭头常驻，展开未悬停时隐藏，项目行仍无折叠箭头', async () => {
+  await mount()
+  const style = document.createElement('style')
+  style.textContent = sidebarCss
+  document.body.append(style)
+  const title = button('项目')
+  expect(getComputedStyle(title.querySelector('svg')!).opacity).toBe('0')
+  await click('项目')
+  expect(title.getAttribute('aria-expanded')).toBe('false')
+  expect(getComputedStyle(title.querySelector('svg')!).opacity).toBe('1')
+  await click('项目')
+  expect(getComputedStyle(title.querySelector('svg')!).opacity).toBe('0')
+  expect(document.querySelector('.dsh-space-heading>svg')).toBeNull()
+})
+
+it('搜索 Escape 避开输入法组字及 229 按键，正常 Escape 关闭', async () => {
+  await mount()
+  await click('搜索')
+  const field = document.querySelector<HTMLInputElement>('.dsh-space-search')!
+  await input('搜索项目或会话', 'ceshi')
+  await act(async () => {
+    field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 229, bubbles: true }))
+  })
+  expect(field.value).toBe('ceshi')
+  expect(document.querySelector('.searching')).not.toBeNull()
+  await act(async () => field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  expect(field.value).toBe('')
+  expect(document.querySelector('.searching')).toBeNull()
+  expect(document.activeElement).toBe(button('搜索'))
+})
+
+it('窄栏搜索入口在展开侧栏后聚焦，关闭时忽略过期全文结果', async () => {
+  vi.useFakeTimers()
+  const { setWide, sessions } = await mount(false)
+  await click('搜索会话')
+  await setWide(true)
+  expect(document.activeElement).toBe(document.querySelector('.dsh-space-search'))
+  let finish!: (value: Awaited<ReturnType<SessionService['search']>>) => void
+  vi.mocked(sessions.search).mockImplementationOnce(() => new Promise((resolve) => {
+    finish = resolve
+  }))
+  await input('搜索项目或会话', '正文')
+  await act(async () => vi.advanceTimersByTimeAsync(300))
+  const signal = vi.mocked(sessions.search).mock.calls[0]![1]!
+  await click('关闭搜索')
+  expect(signal.aborted).toBe(true)
+  await act(async () => finish({ ok: true, value: { items: [{ sessionId: 's', snippet: '过期片段' }], hasMore: false } }))
+  await click('搜索')
+  expect(document.querySelector('.dsh-space-list')?.textContent).not.toContain('过期片段')
+  expect(document.querySelector('[data-section="workspaces"]')).not.toBeNull()
+})
 
 it('空闲会话保留左侧占位但不显示状态图形', async () => {
   await mount()
@@ -266,12 +356,34 @@ it('会话悬浮预览只展示摘要，移入后仍可原位改名', async () =
   expect(document.querySelector('input[aria-label="名称"]')).not.toBeNull()
 })
 
+it('浮层路径按目录分段，保留中文、连字符和 Windows 分隔符', async () => {
+  const { item } = await mount()
+  const paths = [
+    ['/private/tmp/dsh-space-smoke.abc/上线验收空间', ['/private/', 'tmp/', 'dsh-space-smoke.abc/', '上线验收空间']],
+    ['C:\\开发\\source-a', ['C:\\', '开发\\', 'source-a']],
+    ['\\\\server\\share\\source-b', ['\\\\server\\', 'share\\', 'source-b']],
+    ['/', ['/']],
+  ] as const
+  await registry({ ...fixture.registry!, items: [{ ...item, primary: undefined, members: paths.map(([path]) => ({ path, mode: 'reference' })) }] })
+  await click('查看信息')
+  const codes = document.querySelectorAll('.dsh-space-detail-member code')
+  paths.forEach(([path, parts], index) => {
+    expect(codes[index]!.textContent).toBe(path)
+    expect(Array.from(codes[index]!.querySelectorAll('span')).map(span => span.textContent)).toEqual(parts)
+    expect(codes[index]!.getAttribute('dir')).toBe('ltr')
+  })
+})
+
 describe('侧栏交互', () => {
   it('项目行只保留开合文件夹图标，折叠切换不改变类型或会话', async () => {
     const { workspaces, sessions } = await mount()
     const heading = document.querySelector<HTMLButtonElement>('.dsh-space-heading')!
     const icon = heading.querySelector('.dsh-space-workspace-icon')!
     const open = icon.innerHTML
+    expect(icon.classList.contains('space')).toBe(true)
+    expect(heading.getAttribute('aria-description')).toBe('空间项目')
+    expect(heading.textContent).toBe('演示空间')
+    expect(heading.querySelector('.dsh-space-count')).toBeNull()
     expect(heading.querySelectorAll('svg')).toHaveLength(1)
     expect(heading.getAttribute('aria-expanded')).toBe('true')
     await act(async () => heading.click())
@@ -404,7 +516,7 @@ describe('侧栏交互', () => {
     await click('分组视图')
     expect(document.querySelector('.dsh-space-head')).toBeNull()
     expect(document.querySelectorAll('.dsh-space-session')).toHaveLength(1)
-    await click('工作区视图')
+    await click('项目视图')
     expect(document.querySelector('.dsh-space-head.current')).not.toBeNull()
     workspaceSnapshot.items = []
     await registry({ ...fixture.registry! })
@@ -428,7 +540,7 @@ describe('侧栏交互', () => {
     await click('新建分组')
     await input('分组名称', '迭代计划')
     expect(mode.getSnapshot().blocked).toBe(true)
-    expect(button('工作区视图').disabled).toBe(true)
+    expect(button('项目视图').disabled).toBe(true)
     await click('取消编辑分组')
     expect(createLayoutStore().getSnapshot().groups).toEqual([])
     await click('新建分组')
@@ -476,7 +588,7 @@ describe('侧栏交互', () => {
     expect(document.querySelector<HTMLInputElement>('[aria-label="分组名称"]')?.value).toBe('本页草稿')
     await click('取消编辑分组')
     expect(mode.getSnapshot().blocked).toBe(false)
-    expect(button('工作区视图').getAttribute('aria-checked')).toBe('true')
+    expect(button('项目视图').getAttribute('aria-checked')).toBe('true')
   })
 
   it('宿主收起侧栏时保留分组名称及颜色草稿', async () => {
@@ -778,6 +890,7 @@ describe('侧栏交互', () => {
 
   it('置顶工作区与单个会话只改变展示位置，取消后恢复归属', async () => {
     const { workspaces } = await mount()
+    expect(document.querySelector('[data-section="pinned"]')).toBeNull()
     await act(async () => document.querySelector<HTMLButtonElement>('.dsh-space-head [role="menuitem"]')!.click())
     expect(document.querySelector('[data-section="pinned"] .dsh-space-group')).not.toBeNull()
     expect(document.querySelector('[data-section="workspaces"] .dsh-space-group')).toBeNull()
@@ -788,6 +901,7 @@ describe('侧栏交互', () => {
     expect(document.querySelector('[data-section="pinned"] .dsh-space-group [data-session-id="s"]')).not.toBeNull()
     await act(async () => document.querySelector<HTMLButtonElement>('.dsh-space-head [role="menuitem"]')!.click())
     expect(document.querySelector('[data-section="workspaces"] [data-session-id="s"]')).not.toBeNull()
+    expect(document.querySelector('[data-section="pinned"]')).toBeNull()
     expect(workspaces.insertBefore).not.toHaveBeenCalled()
     expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
     expect(operation).not.toHaveBeenCalled()
@@ -795,13 +909,26 @@ describe('侧栏交互', () => {
 
   it('大分区可以独立折叠、排序，折叠后仍可创建', async () => {
     await mount()
-    await click('工作区')
+    await click('项目')
     expect(document.querySelector('.dsh-space-group')).toBeNull()
     expect(button('添加工作区').disabled).toBe(false)
     await click('下移分区')
-    expect(Array.from(document.querySelectorAll('[data-section]')).map(node => node.getAttribute('data-section'))).toEqual(['chats', 'pinned', 'workspaces'])
+    expect(Array.from(document.querySelectorAll('[data-section]')).map(node => node.getAttribute('data-section'))).toEqual(['workspaces', 'chats'])
     await click('创建空间')
     expect(document.querySelector('dialog')?.getAttribute('aria-label')).toBe('创建空间')
+  })
+
+  it('失效置顶不撑起空分区，首个有效置顶显示，移除最后一项再次隐藏', async () => {
+    const layout = createLayoutStore()
+    layout.setPinned({ kind: 'session', id: 'missing' }, true)
+    await mount()
+    expect(document.querySelector('[data-section="pinned"]')).toBeNull()
+    const order = layout.getSnapshot().sections
+    await click('置顶 已有会话')
+    expect(document.querySelector('[data-section="pinned"] [data-session-id="s"]')).not.toBeNull()
+    await click('取消置顶 已有会话')
+    expect(document.querySelector('[data-section="pinned"]')).toBeNull()
+    expect(layout.getSnapshot().sections).toEqual(order)
   })
 
   it('独立对话平铺且目录可单独管理，描述不可用时退回核心分组', async () => {
@@ -885,25 +1012,30 @@ describe('侧栏交互', () => {
     expect(sessions.open).not.toHaveBeenCalled()
     expect(operation).not.toHaveBeenCalled()
     expect(createLayoutStore().getSnapshot().assignments.s).toBe('g')
+    await click('搜索')
     await input('搜索归档会话', '不匹配')
     expect(document.querySelector('.dsh-space-archive')?.textContent).toContain('没有匹配')
   })
 
-  it('关闭归档恢复原视图、搜索和滚动位置，归档排序不修改原排序', async () => {
+  it('搜索收起清空筛选，关闭归档恢复原视图和滚动位置且保留原排序', async () => {
     await mount()
     await click('分组视图')
-    await input('搜索会话或工作区', '已有')
+    await click('搜索')
+    await input('搜索项目或会话', '已有')
+    await click('关闭搜索')
     const list = document.querySelector<HTMLDivElement>('.dsh-space-list')!
     await act(async () => {
       list.scrollTop = 120
       list.dispatchEvent(new Event('scroll'))
     })
     await click('查看已归档')
+    await click('搜索')
     await input('搜索归档会话', '归档查询')
+    await click('关闭搜索')
     await click('按标题')
     await click('关闭归档')
     expect(button('分组视图').getAttribute('aria-checked')).toBe('true')
-    expect(document.querySelector<HTMLInputElement>('[aria-label="搜索会话或工作区"]')?.value).toBe('已有')
+    expect(document.querySelector<HTMLInputElement>('[aria-label="搜索项目或会话"]')?.value).toBe('')
     expect(list.scrollTop).toBe(120)
     expect(createLayoutStore().getSnapshot().sessionSort).toBe('updated')
   })
@@ -1000,6 +1132,8 @@ describe('侧栏交互', () => {
     const plain = { ...item, kind: 'plain' as const, members: undefined, primary: undefined, revision: undefined }
     workspaceSnapshot.items = [plain]
     await registry({ ...fixture.registry!, items: [plain] })
+    expect(document.querySelector('.dsh-space-workspace-icon.space')).toBeNull()
+    expect(document.querySelector('.dsh-space-heading')?.getAttribute('aria-description')).toBeNull()
     await click('编辑工作区')
     expect(document.querySelector('.dsh-space-member-list')).toBeNull()
     await act(async () => document.querySelector<HTMLInputElement>('.dsh-space-enhance input')!.click())
@@ -1316,7 +1450,8 @@ describe('侧栏交互', () => {
       items: [{ sessionId: 's', snippet: '正文中的命中片段' }],
       hasMore: false,
     } })
-    await input('搜索会话或工作区', '正文')
+    await click('搜索')
+    await input('搜索项目或会话', '正文')
     await act(async () => vi.advanceTimersByTimeAsync(300))
     expect(sessions.search).toHaveBeenCalledWith('正文', expect.any(AbortSignal))
     expect(document.querySelector('.dsh-space-list')?.textContent).toContain('正文中的命中片段')
@@ -1327,7 +1462,8 @@ describe('侧栏交互', () => {
     vi.useFakeTimers()
     const { sessions } = await mount()
     vi.mocked(sessions.search).mockResolvedValueOnce({ ok: false, error: { message: '索引未开启' } })
-    await input('搜索会话或工作区', '已有会话')
+    await click('搜索')
+    await input('搜索项目或会话', '已有会话')
     await act(async () => vi.advanceTimersByTimeAsync(300))
     expect(document.querySelector('.dsh-space-list')?.textContent).toContain('已有会话')
     expect(document.querySelector('[role="alert"]')?.getAttribute('title')).toBe('索引未开启')

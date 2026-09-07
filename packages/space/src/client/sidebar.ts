@@ -20,6 +20,7 @@ import { createArchiveView } from './archive-view.ts'
 import { createControls } from './controls.ts'
 import { createDetails } from './details.ts'
 import { createGroupEditor } from './group-editor.ts'
+import { createImeGuard } from './ime.ts'
 import { createLayoutStore, projectLayout, visibleEntries } from './layout.ts'
 import { createMemberEditor } from './member-editor.ts'
 import {
@@ -124,6 +125,14 @@ export function createSidebar(
   const Details = createDetails(React)
   const GroupEditor = createGroupEditor(React)
   const ArchiveView = createArchiveView(React)
+  const pathText = (path: string): unknown => e(
+    'code',
+    { className: 'dsh-space-path-text', dir: 'ltr' },
+    ...(path.match(/(?:^[\\/]+)?[^\\/]+[\\/]*|[\\/]+/g) ?? []).flatMap((part, index) => [
+      e('span', { key: `part-${index}` }, part),
+      e('wbr', { key: `break-${index}` }),
+    ]),
+  )
   const layoutStore = createLayoutStore()
   const subscribeSessions = (fn: () => void): (() => void) =>
     sessions.list.subscribe(fn)
@@ -172,6 +181,7 @@ export function createSidebar(
     const surfaceKey = archiveOpen ? 'archive' : activeView
     const [expandedLists, setExpandedLists] = React.useState<string[]>([])
     const [query, setQuery] = React.useState('')
+    const [searchOpen, setSearchOpen] = React.useState(false)
     const [searchRevision, setSearchRevision] = React.useState(0)
     const [remoteSearch, setRemoteSearch] = React.useState<RemoteSearch>({
       query: '',
@@ -180,7 +190,10 @@ export function createSidebar(
       hasMore: false,
     })
     const searchInput = React.useRef<HTMLInputElement | null>(null)
-    const focusSearch = React.useRef(false)
+    const searchToolbar = React.useRef<HTMLDivElement | null>(null)
+    const searchPane = React.useRef<HTMLDivElement | null>(null)
+    const restoreSearchFocus = React.useRef(false)
+    const searchIme = React.useMemo(createImeGuard, [])
     const dragWorkspace = React.useRef<string | undefined>(undefined)
     const dragSection = React.useRef<SectionId | undefined>(undefined)
     const dragPin = React.useRef<Pin | undefined>(undefined)
@@ -212,6 +225,7 @@ export function createSidebar(
       const sorted = sortWorkspaces(items, buckets, layout.workspaceSort)
       return projectLayout(sorted.items, sorted.buckets, layout.pins)
     }, [items, buckets, layout.pins, layout.workspaceSort])
+    const visibleSections = layout.sections.filter(id => id !== 'pinned' || sections.pinned.length > 0)
     const groups = React.useMemo(() => projectGroups(items, buckets, layout), [items, buckets, layout])
     const ownsCurrent = (entry: LayoutEntry): boolean => entry.kind === 'session'
       ? entry.session.id === sessionState.current
@@ -296,11 +310,19 @@ export function createSidebar(
         layoutStore.setCollapsed(currentSection, false)
     }, [sessionState.current, currentSection, draftWorkspaceId])
     React.useEffect(() => {
-      if (wide && focusSearch.current) {
+      if (!wide)
+        return
+      // 宿主 React 对 inert 的属性支持与测试环境不同，直接设置 DOM 属性
+      searchToolbar.current?.toggleAttribute('inert', searchOpen)
+      searchPane.current?.toggleAttribute('inert', !searchOpen)
+      if (searchOpen) {
         searchInput.current?.focus()
-        focusSearch.current = false
       }
-    }, [wide])
+      else if (restoreSearchFocus.current) {
+        searchToolbar.current?.querySelector<HTMLButtonElement>('[aria-label="搜索"]')?.focus()
+        restoreSearchFocus.current = false
+      }
+    }, [wide, searchOpen])
     React.useEffect(() => {
       if (!notice)
         return
@@ -922,6 +944,7 @@ export function createSidebar(
               'disabled': busy,
               'aria-expanded': open,
               'aria-current': item.workspaceId === draftWorkspaceId ? 'location' : undefined,
+              'aria-description': item.kind === 'space' ? '空间项目' : undefined,
               'draggable': !busy && (layout.workspaceSort === 'manual' || isPinned({ kind: 'workspace', id: item.workspaceId })),
               'onDragStart': (event: DragEvent) => {
                 if (isPinned({ kind: 'workspace', id: item.workspaceId }))
@@ -936,13 +959,12 @@ export function createSidebar(
               },
               'onClick': () => toggle(item.workspaceId),
             },
-            e('span', { className: 'dsh-space-workspace-icon' }, e(Icon, { name: open ? 'open' : 'folder' })),
+            e('span', { className: `dsh-space-workspace-icon${item.kind === 'space' ? ' space' : ''}` }, e(Icon, { name: open ? 'open' : 'folder' })),
             e(
               'span',
               { className: 'dsh-space-heading-text' },
               e('span', { className: 'dsh-space-title' }, item.title),
             ),
-            e('span', { className: 'dsh-space-count' }, rows.length || ''),
           ),
           e(IconButton, {
             icon: 'chat',
@@ -959,15 +981,15 @@ export function createSidebar(
         open ? renderLimited(rows, `workspace:${item.workspaceId}`, item.title, row => row.id === sessionState.current, session => renderSession(session, item)) : null,
       )
     }
-    const sectionLabels: Record<SectionId, string> = { pinned: '置顶', chats: '独立对话', workspaces: '工作区' }
+    const sectionLabels: Record<SectionId, string> = { pinned: '置顶', chats: '对话', workspaces: '项目' }
     const renderSection = (id: SectionId): unknown => {
       const open = !layout.collapsed.includes(id)
-      const index = layout.sections.indexOf(id)
+      const index = visibleSections.indexOf(id)
       const actions: MenuAction[] = ([-1, 1] as const).map(direction => ({
         label: direction === -1 ? '上移分区' : '下移分区',
         icon: direction === -1 ? 'up' : 'down',
-        disabled: index + direction < 0 || index + direction >= layout.sections.length,
-        run: () => layoutStore.moveSection(id, direction < 0 ? layout.sections[index - 1] : layout.sections[index + 2]),
+        disabled: index + direction < 0 || index + direction >= visibleSections.length,
+        run: () => layoutStore.moveSection(id, direction < 0 ? visibleSections[index - 1] : visibleSections[index + 2]),
       }))
       if (id === 'chats')
         actions.push({ label: '管理对话目录', icon: 'folder', run: () => begin({ type: 'chat-directories' }) })
@@ -1021,7 +1043,7 @@ export function createSidebar(
               dragPin.current = undefined
             },
           }, entry.kind === 'workspace' ? renderGroup(entry.item, entry.rows) : renderSession(entry.session, entry.item, true)))
-        : null, open && !sections[id].length ? e('div', { className: 'dsh-space-section-empty' }, id === 'pinned' ? '暂无置顶' : id === 'chats' ? '暂无独立对话' : '暂无工作区') : null)
+        : null, open && !sections[id].length ? e('div', { className: 'dsh-space-section-empty' }, id === 'chats' ? '暂无对话' : '暂无项目') : null)
     }
     const renderFlatGroups = (): unknown => {
       const renderEntries = (entries: typeof groups.ungrouped, key: string, label: string): unknown => renderLimited(entries, key, label, entry => entry.session.id === sessionState.current, entry => renderSession(entry.session, entry.item, true))
@@ -1080,27 +1102,34 @@ export function createSidebar(
       { label: '最近活动', icon: 'clock', checked: archiveSort === 'updated', run: () => setArchiveSort('updated') },
       { label: '按标题', icon: 'edit', checked: archiveSort === 'title', run: () => setArchiveSort('title') },
     ]
+    const openSearch = (): void => {
+      stopInfoTimer()
+      setInfo(null)
+      setSearchOpen(true)
+      expandSidebar?.()
+      searchInput.current?.focus()
+    }
     const renderToolbar = (): unknown => {
       const workspaceIds = items.filter(item => item.kind !== 'chat').map(item => item.workspaceId)
       const anyOpen = workspaceIds.some(id => !collapsed.includes(id))
-      return e('div', { className: 'dsh-space-view-toolbar' }, e('div', { 'className': 'dsh-space-view-switch', 'role': 'radiogroup', 'aria-label': '侧栏视图' }, ...(['workspaces', 'groups'] as const).map(view => e('button', {
+      return e('div', { 'className': 'dsh-space-view-toolbar', 'ref': searchToolbar, 'aria-hidden': searchOpen }, e('div', { 'className': 'dsh-space-view-switch', 'role': 'radiogroup', 'aria-label': '侧栏视图' }, ...(['groups', 'workspaces'] as const).map(view => e('button', {
         'key': view,
         'type': 'button',
         'role': 'radio',
         'aria-checked': activeView === view,
-        'aria-label': view === 'workspaces' ? '工作区视图' : '分组视图',
+        'aria-label': view === 'workspaces' ? '项目视图' : '分组视图',
         'tabIndex': activeView === view ? 0 : -1,
         'disabled': busy || !!dialog || archiveOpen,
         'onClick': () => changeView(view),
         'onKeyDown': (event: KeyboardEvent) => {
           if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
             event.preventDefault()
-            const next = event.key === 'Home' ? 'workspaces' : event.key === 'End' ? 'groups' : view === 'workspaces' ? 'groups' : 'workspaces'
+            const next = event.key === 'Home' ? 'groups' : event.key === 'End' ? 'workspaces' : view === 'workspaces' ? 'groups' : 'workspaces'
             changeView(next)
-            document.querySelector<HTMLButtonElement>(`[aria-label="${next === 'workspaces' ? '工作区视图' : '分组视图'}"]`)?.focus()
+            document.querySelector<HTMLButtonElement>(`[aria-label="${next === 'workspaces' ? '项目视图' : '分组视图'}"]`)?.focus()
           }
         },
-      }, e(Icon, { name: view === 'workspaces' ? 'folder' : 'hash', size: 14 }), view === 'workspaces' ? '工作区' : '分组'))), archiveOpen
+      }, e(Icon, { name: view === 'workspaces' ? 'folder' : 'hash', size: 14 }), view === 'workspaces' ? '项目' : '分组'))), e(IconButton, { icon: 'search', label: '搜索', disabled: busy || !!dialog, onClick: openSearch }), archiveOpen
         ? null
         : activeView === 'workspaces'
           ? e(IconButton, {
@@ -1547,7 +1576,7 @@ export function createSidebar(
                 onClick: () => perform(() => workspaces.openPath(item.path)),
               },
               e(Icon, { name: 'folder' }),
-              e('code', null, item.path),
+              pathText(item.path),
               e(Icon, { name: 'external', size: 14 }),
             )
           : null,
@@ -1579,7 +1608,7 @@ export function createSidebar(
                   'span',
                   { className: 'dsh-space-detail-member-text' },
                   member.title ? e('span', null, member.title) : null,
-                  e('code', null, member.path),
+                  pathText(member.path),
                 ),
                 e(Icon, { name: 'external', size: 14 }),
               )),
@@ -1607,10 +1636,11 @@ export function createSidebar(
           : null,
       )
     }
-    const openSearch = (): void => {
-      focusSearch.current = true
-      expandSidebar?.()
-      searchInput.current?.focus()
+    const closeSearch = (): void => {
+      archiveOpen ? setArchiveQuery('') : setQuery('')
+      searchIme.end()
+      restoreSearchFocus.current = true
+      setSearchOpen(false)
     }
     const openSpace = (): void => {
       expandSidebar?.()
@@ -1739,26 +1769,30 @@ export function createSidebar(
       { className: 'dsh-space-root', onClickCapture: dismissInfoOnAction },
       renderDialog(),
       renderInfo(),
-      renderToolbar(),
       e(
         'div',
-        { className: 'dsh-space-search-wrap' },
-        e(Icon, { name: 'search', size: 14 }),
-        e('input', {
+        { className: `dsh-space-toolbar-shell${searchOpen ? ' searching' : ''}` },
+        renderToolbar(),
+        e('div', { 'className': 'dsh-space-search-wrap', 'ref': searchPane, 'aria-hidden': !searchOpen }, e(Icon, { name: 'search', size: 14 }), e('input', {
           'ref': searchInput,
           'className': 'dsh-space-search',
           'type': 'search',
           'value': archiveOpen ? archiveQuery : query,
           'disabled': !!groupDraft,
-          'placeholder': archiveOpen ? '搜索归档会话' : '搜索会话或工作区',
-          'aria-label': archiveOpen ? '搜索归档会话' : '搜索会话或工作区',
+          'placeholder': archiveOpen ? '搜索归档会话' : '搜索项目或会话',
+          'aria-label': archiveOpen ? '搜索归档会话' : '搜索项目或会话',
           'onChange': (event: { target: HTMLInputElement }) =>
             archiveOpen ? setArchiveQuery(event.target.value) : setQuery(event.target.value),
-          'onKeyDown': (event: KeyboardEvent) => {
-            if (event.key === 'Escape')
-              archiveOpen ? setArchiveQuery('') : setQuery('')
+          'onCompositionStart': searchIme.start,
+          'onCompositionEnd': searchIme.end,
+          'onKeyDown': (event: { key: string, nativeEvent: KeyboardEvent, preventDefault: () => void, stopPropagation: () => void }) => {
+            if (event.key === 'Escape' && !searchIme.active(event.nativeEvent)) {
+              event.preventDefault()
+              event.stopPropagation()
+              closeSearch()
+            }
           },
-        }),
+        }), e(IconButton, { icon: 'close', label: '关闭搜索', onClick: closeSearch })),
       ),
       notices,
       e(
@@ -1828,7 +1862,7 @@ export function createSidebar(
               : e(
                   'div',
                   null,
-                  ...layout.sections.map(renderSection),
+                  ...visibleSections.map(renderSection),
                   workspaceState.phase === 'ready' && buckets.misc.some(row => !isPinned({ kind: 'session', id: row.id }))
                     ? e(
                         'section',

@@ -11,6 +11,7 @@ import { draftSubmissionText } from './draft-intent.ts'
 import { createDraftOptions } from './draft-options.ts'
 import { createDraftSession } from './draft-session.ts'
 import { createNativeCommandUI, createNativeComposer, extendNativeEntry, extendNewSession, pauseInitialSelection, readNativeClientCommands, selectSnapshot, useNativeSnapshot } from './native-compat.ts'
+import { createNewSessionAction } from './new-session.ts'
 import { waitFor } from './wait.ts'
 
 export interface DraftHostSessions extends SessionService {
@@ -320,7 +321,14 @@ export function createDraftComposer(
               disabled: sessions.list.getSnapshot().current === undefined && Boolean(draft.getSnapshot().creationId),
             }),
           )))
-          parts.push(extendNewSession(workspaces, id => draft.begin(id)))
+          const newSession = createNewSessionAction(draft, sessions, workspaces, (message) => {
+            const current = sessions.list.getSnapshot().current
+            const scope = current === undefined ? undefined : sessions.scope(current)
+            const target = scope ? conversation.input.for(scope) : input
+            target.notify('error', message)
+          })
+          parts.push(newSession.dispose)
+          parts.push(extendNewSession(workspaces, newSession.begin))
           undo = () => parts.reverse().forEach(off => off())
           if (resumeDraft || sessions.list.getSnapshot().current === undefined)
             draft.begin(draft.getSnapshot().targetId)

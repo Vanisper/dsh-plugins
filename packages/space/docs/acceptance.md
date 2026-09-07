@@ -17,7 +17,7 @@
 
 ## 自动化门禁
 
-自动化门禁为 `pnpm test`、`pnpm typecheck`、`pnpm lint`、`pnpm build` 和 `git diff --check`。Space 测试覆盖 23 个文件、196 项用例。发布包包含宿主入口、客户端产物、类型声明、配置 patch、README 和第三方许可。
+自动化门禁为 `pnpm test`、`pnpm typecheck`、`pnpm lint`、`pnpm build` 和 `git diff --check`。Space 测试覆盖 23 个文件、198 项用例。发布包包含宿主入口、客户端产物、类型声明、配置 patch、README 和第三方许可。
 
 | 层次 | 覆盖内容 |
 | --- | --- |
@@ -42,6 +42,7 @@
 | 空间创建 | 零成员及多成员空间创建成功；显式创建空间后开始该空间的草稿，不另建 Session |
 | 草稿入口与启动 | 工作区入口预选目标；独立对话入口不选项目。刷新、开始草稿、改选目标及添加图片时，核心 Workspace 和会话 ID 总数均不增加，文本保留 |
 | 草稿命令菜单 | 加号和 `/` 使用原生命令目录与搜索；默认预设的 `plan` 和前端 `model` 均可见。权限、模型、推理等级和 Plan 在本地选择；Full access 未确认时不可应用。配置前后均为 15 个 Workspace、18 个 Session。原生 Plan 标记可关闭，模式往返保留正文和配置 |
+| Plan 直接选择 | 鼠标点选及 `/pl` 键盘选择直接开启 Plan 并关闭菜单，不出现第二级开关选项；重复选择保持开启，点击原生标记退出。路径正文、图片及输入焦点保留；裸 `/plan` 只消费命令文本，不发送附件。1280px、390px 和 320px 深色视口无整页横向溢出，截图为 `native-plan-direct-*` |
 | 目标首发 | 菜单选择 `goal` 只填写目标；首次发送后从 15 个 Workspace、18 个 Session 增加到 16 个 Workspace、19 个 Session，textarea 保持同一 DOM。真实记录依次出现 read-only、Plan 和目标创建，模型为 Pro/Low；运行随后报 `MISSING_CREDENTIAL`，测试目标已暂停 |
 | 连续输入 | 独立对话首发增加一个 Workspace 和一个 Session；项目内首发只增加一个 Session。两种路径发送前后的 textarea 均为同一个 DOM 节点 |
 | 首发配置 | 创建前暂存 Pro、Max、Read Only 和 Plan，实体数量不变；真实会话记录显示权限与 Plan 命令已应用，模型及推理等级一致。宿主接受消息后报 `MISSING_CREDENTIAL`，不视为模型调用成功 |

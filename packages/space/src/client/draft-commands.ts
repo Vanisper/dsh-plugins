@@ -136,8 +136,6 @@ export function createDraftCommands(
           return []
         available(name)
         const state = options.getSnapshot()
-        if (name === 'plan')
-          return [{ id: 'on', label: '开启规划模式', active: options.plan }, { id: 'off', label: '关闭规划模式', active: !options.plan }]
         if (name === 'permission')
           return state.permissions ? native.permissions(state.permissions) : []
         const rows: SelectOption[] = []
@@ -160,10 +158,7 @@ export function createDraftCommands(
         if (!segmentValid(segment))
           throw new Error('草稿已变化，请重新选择命令')
         available(name)
-        if (name === 'plan') {
-          options.setPlan(row.id === 'on')
-        }
-        else if (name === 'permission') {
+        if (name === 'permission') {
           if (!await options.command(`/permission ${row.id}`))
             throw new Error('权限选项已失效，请重新选择')
         }
@@ -196,6 +191,12 @@ export function createDraftCommands(
         dismiss()
         if (!/^\s*\/goal(?:\s|$)/u.test(input.snapshot.draft))
           input.insertText('/goal ', span)
+        focus()
+      }
+      else if (item.name === 'plan') {
+        dismiss()
+        if (input.consumeToken({ kind: 'span', span }))
+          options.setPlan(true)
         focus()
       }
       else {
@@ -237,18 +238,19 @@ export function createDraftCommands(
           originalSubmit(mode)
           return
         }
-        if (!args) {
-          openOptions(name, { via: 'enter', token: line })
-          return
-        }
         if (name === 'plan') {
-          if (args === 'off') {
-            options.setPlan(false)
-            input.consumeToken({ kind: 'span', span: { start: 0, end: snapshot.draft.length, draftRev: snapshot.draftRev } })
+          if (!args || args === 'off') {
+            if (input.consumeToken({ kind: 'span', span: { start: 0, end: snapshot.draft.length, draftRev: snapshot.draftRev } }))
+              options.setPlan(args !== 'off')
+            focus()
           }
           else {
             originalSubmit(mode)
           }
+          return
+        }
+        if (!args) {
+          openOptions(name, { via: 'enter', token: line })
           return
         }
         if (name === 'permission' && args === 'danger-full-access') {

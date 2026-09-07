@@ -75,19 +75,20 @@ describe('无实体原生命令适配', () => {
     expect(h.sink).not.toHaveBeenCalled()
   })
 
-  it('配置 Plan 保留文本和附件，使用原生选项控制器并可再次关闭', async () => {
+  it('点选 Plan 直接开启并关闭菜单，不弹选项，重复选择不反转状态', async () => {
     const h = harness()
     h.input.setDraft('keep text')
     h.input.addImages(['image'])
     await h.pick('plan')
-    await h.popupReady()
-    await h.commands.popup.select(0)
     expect(h.options.plan).toBe(true)
+    expect(h.commands.menu.getSnapshot().open).toBe(false)
+    expect(h.commands.popup.state.getSnapshot().open).toBe(false)
+    expect(h.focus).toHaveBeenCalled()
     expect(h.input.snapshot).toMatchObject({ draft: 'keep text', imageIds: ['image'] })
     await h.pick('plan')
-    await h.popupReady()
-    await h.commands.popup.select(1)
-    expect(h.options.plan).toBe(false)
+    expect(h.options.plan).toBe(true)
+    expect(h.commands.popup.state.getSnapshot().open).toBe(false)
+    expect(h.input.snapshot).toMatchObject({ draft: 'keep text', imageIds: ['image'] })
     expect(h.sink).not.toHaveBeenCalled()
   })
 
@@ -95,8 +96,6 @@ describe('无实体原生命令适配', () => {
     const h = harness()
     h.input.setDraft('/tmp/project 请检查这个目录')
     await h.pick('plan')
-    await h.popupReady()
-    await h.commands.popup.select(0)
     expect(h.input.snapshot.draft).toBe('/tmp/project 请检查这个目录')
     h.input.setDraft('/goal existing objective')
     await h.pick('goal')
@@ -202,6 +201,17 @@ describe('无实体原生命令适配', () => {
     expect(h.sink.mock.calls[0]?.[0]).toBe('/plan review changes')
   })
 
+  it('提交裸 /plan 直接启用配置，只消费命令文本，不发送附件或弹出选项', async () => {
+    const h = harness()
+    h.input.setDraft('  /plan  ')
+    h.input.addImages(['image'])
+    h.input.submit()
+    await vi.waitFor(() => expect(h.options.plan).toBe(true))
+    expect(h.commands.popup.state.getSnapshot().open).toBe(false)
+    expect(h.input.snapshot).toMatchObject({ draft: '', imageIds: ['image'] })
+    expect(h.sink).not.toHaveBeenCalled()
+  })
+
   it('原生触发检测与模糊搜索过滤目录，方向键和 Enter 选择，不干扰 IME', async () => {
     const h = harness()
     h.input.setDraft('/pl')
@@ -211,8 +221,7 @@ describe('无实体原生命令适配', () => {
     expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     h.commands.arbitrate('down', false)
     h.commands.arbitrate('enter', false)
-    await h.popupReady()
-    await h.commands.popup.select(0)
+    expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     expect(h.input.snapshot.draft).toBe('')
     expect(h.options.plan).toBe(true)
     expect(h.sink).not.toHaveBeenCalled()
@@ -247,8 +256,8 @@ describe('无实体原生命令适配', () => {
     await h.options.load()
     h.commands.close()
     await h.pick('plan')
-    await h.popupReady()
-    expect(h.commands.popup.state.getSnapshot().options).toHaveLength(2)
+    expect(h.options.plan).toBe(true)
+    expect(h.commands.popup.state.getSnapshot().open).toBe(false)
   })
 
   it('冲突和缺失的命令不被内置适配器偷偷补回', async () => {
@@ -267,17 +276,30 @@ describe('无实体原生命令适配', () => {
   it('草稿变化后拒绝旧选项，取消不消费文字或附件', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     const h = harness()
-    h.input.setDraft('/plan')
-    await h.pick('plan')
+    h.input.setDraft('/model')
+    await h.pick('model')
     await h.popupReady()
     h.input.setDraft('new draft')
     await h.commands.popup.select(0)
     expect(h.commands.popup.state.getSnapshot().error).toContain('草稿已变化')
-    expect(h.options.plan).toBe(false)
+    expect(h.options.explicit().selection).toBeUndefined()
     h.commands.popup.dismiss({ focusComposer: true })
     expect(h.input.snapshot.draft).toBe('new draft')
     expect(log).toHaveBeenCalledOnce()
     log.mockRestore()
+  })
+
+  it('草稿变化后拒绝旧菜单中的 Plan，不消费新正文或改变配置', async () => {
+    const h = harness()
+    h.input.setDraft('/pl')
+    h.commands.toggle()
+    await vi.waitFor(() => expect(h.commands.menu.getSnapshot().groups[0]?.status).toBe('ready'))
+    const index = h.commands.menu.getSnapshot().groups[0]!.items.findIndex(item => item.name === 'plan')
+    h.input.setDraft('new draft')
+    h.commands.pick('command', index)
+    expect(h.options.plan).toBe(false)
+    expect(h.input.snapshot.draft).toBe('new draft')
+    expect(h.sink).not.toHaveBeenCalled()
   })
 
   it('切换视图、丢弃或卸载后，晚到的命令目录不能创建实体', async () => {

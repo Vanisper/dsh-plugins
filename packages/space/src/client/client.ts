@@ -26,7 +26,7 @@ loader?.load({
     const exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
     const React = require('react') as ReactLike
-    exports.inject = ['slots', 'sessions', 'workspaces', 'conversation']
+    exports.inject = ['slots', 'sessions', 'workspaces', 'conversation', 'commandUi']
     exports.apply = (ctx: ClientContext): void => {
       const slots = ctx.get('slots') as SlotsService | undefined
       const sessions = ctx.get('sessions') as DraftHostSessions | undefined

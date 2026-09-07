@@ -110,6 +110,10 @@ describe('可撤销宿主兼容扩展', () => {
       { id: '@deepseek-ai/dsh-client-ui-conversation', rev: 'cf4575517765' },
       { id: '@deepseek-ai/dsh-client-ui-renderer', rev: '79b59d365f3b' },
       { id: '@deepseek-ai/dsh-client-ui-model-selection', rev: '639da97bfe66' },
+      { id: '@deepseek-ai/dsh-client-ui-input-trigger', rev: 'b9564b9138a7' },
+      { id: '@deepseek-ai/dsh-client-ui-commands', rev: '887c0ca028a4' },
+      { id: '@deepseek-ai/dsh-client-ui-plan', rev: '7f9f228f9516' },
+      { id: '@deepseek-ai/dsh-client-ui-permission-presets', rev: 'e36eeb24d0eb' },
     ] }
     expect(() => assertNativeCompatibility(graph)).not.toThrow()
     graph.entries[0]!.rev = 'unknown'

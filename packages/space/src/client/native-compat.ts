@@ -1,8 +1,12 @@
+import type { PopupSelectController, PopupSelectDeps, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
+import type { ConsumeTokenRequest, DetectTrigger, InputTriggerCandidate, MenuReduce, MenuState, TokenSpan } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import type { DraftCommand, DraftOptions } from '../shared/draft-options.ts'
 import type { ReactLike, SlotsService } from './types.ts'
-import { nativeComposer } from '../../.generated/native-input.ts'
+import { nativeCommandMenu, nativeCommandOptions, nativeComposer, nativePermissionOptions } from '../../.generated/native-input.ts'
 
 export interface NativeState {
   draft: string
+  draftRev: number
   imageIds: readonly string[]
   phase: string
   [key: string]: unknown
@@ -18,7 +22,9 @@ export interface NativeInput {
   addImages: (ids: readonly string[]) => boolean
   removeImage: (id: string) => void
   commitSend: (ids: readonly string[]) => void
-  submit: () => void
+  submit: (mode?: unknown) => void
+  consumeToken: (guard: ConsumeTokenRequest['guard']) => boolean
+  insertText: (text: string, span: TokenSpan) => boolean
   notify: (level: 'info' | 'error', text: string) => void
   dispose: () => void
 }
@@ -34,6 +40,35 @@ const revisions: Record<string, string> = {
   '@deepseek-ai/dsh-client-ui-conversation': 'cf4575517765',
   '@deepseek-ai/dsh-client-ui-renderer': '79b59d365f3b',
   '@deepseek-ai/dsh-client-ui-model-selection': '639da97bfe66',
+  '@deepseek-ai/dsh-client-ui-input-trigger': 'b9564b9138a7',
+  '@deepseek-ai/dsh-client-ui-commands': '887c0ca028a4',
+  '@deepseek-ai/dsh-client-ui-plan': '7f9f228f9516',
+  '@deepseek-ai/dsh-client-ui-permission-presets': 'e36eeb24d0eb',
+}
+
+export interface NativeCommandUI {
+  Menu: (props: Record<string, unknown>) => unknown
+  Options: (props: Record<string, unknown>) => unknown
+  Popup: new (deps: PopupSelectDeps) => PopupSelectController<void>
+  detect: DetectTrigger
+  reduce: MenuReduce
+  seed: (state: MenuState, sources: Array<{ name: string, showGroupTitle: boolean }>) => MenuState
+  closed: MenuState
+  filter: <T extends InputTriggerCandidate>(items: readonly T[], query: string) => T[]
+  permissions: (value: NonNullable<DraftOptions['permissions']>) => SelectOption[]
+}
+
+export function createNativeCommandUI(require: (name: string) => unknown, t: (key: string) => string): NativeCommandUI {
+  const { permissions } = nativePermissionOptions(require)
+  return { ...nativeCommandMenu(require), ...nativeCommandOptions(require), permissions: (value: NonNullable<DraftOptions['permissions']>) => permissions(value, t) } as unknown as NativeCommandUI
+}
+
+/** 只读当前注册描述，不把虚构 Session 传给原生命令的 available 或 handler */
+export function readNativeClientCommands(ctx: unknown): DraftCommand[] {
+  const service = (ctx as { get: (name: string) => unknown }).get('commandUi') as { live?: { contributions?: Map<string, DraftCommand> } } | undefined
+  if (!(service?.live?.contributions instanceof Map))
+    throw new Error('无法读取前端命令目录，请更新兼容适配')
+  return [...service.live.contributions.values()].map(({ name, description }) => ({ name, description }))
 }
 
 /** 仅接入已验证的原生构建；不通过函数名或 DOM 猜测宿主版本 */

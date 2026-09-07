@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { DraftModel, DraftModelSelection, DraftOptions } from '../shared/draft-options.ts'
+import type { DraftCommand, DraftModel, DraftModelSelection, DraftOptions } from '../shared/draft-options.ts'
 
 interface LlmDirectory {
   listProviders: () => Array<{ id: string, name: string }>
@@ -19,6 +19,23 @@ export async function readDraftOptions(ctx: Pick<Context, 'get'>): Promise<Draft
   const options: DraftOptions = { current: defaults?.currentSelection() ?? null, groups: [], failures: [] }
   if (presets)
     options.permissions = { currentValue: presets.defaultPreset, options: presets.names.map(name => presets.optionOf(name)) }
+  try {
+    // 宿主冷读接口可装载预设注册，但不会创建 Agent、Session 或启动轮次
+    const agentPresets = ctx.get('agentPresets') as { standingKeyFor: (id?: string) => Promise<object> } | undefined
+    const scope = await agentPresets?.standingKeyFor()
+    // DSH 0.1.1-rc.2 的命令视图接受预设 scope key；不把它当作 Agent 执行命令
+    const commands = ctx.get('commands') as { list: (scope?: object) => readonly DraftCommand[] } | undefined
+    if (!commands)
+      throw new Error('commands unavailable')
+    options.commands = commands.list(scope).map(({ name, description, input }) => ({
+      name,
+      description,
+      ...(input ? { input: { hint: input.hint, ...(input.images ? { images: true } : {}) } } : {}),
+    }))
+  }
+  catch {
+    options.commandError = '无法读取宿主命令目录，请重试或更新兼容适配'
+  }
   if (!llm)
     return options
   // 分组顺序来自宿主；单个供应商失败不隐藏其他可用候选

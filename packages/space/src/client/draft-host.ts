@@ -5,10 +5,10 @@ import type { HostWorkspacePickerProps } from './target-picker.ts'
 import type { ConversationService, ReactLike, SessionService, SlotsService, WorkspaceService } from './types.ts'
 import { runOperation } from './api.ts'
 import { createControls } from './controls.ts'
-import { createDraftMenu } from './draft-menu.ts'
+import { createDraftCommands } from './draft-commands.ts'
 import { createDraftOptions } from './draft-options.ts'
 import { createDraftSession } from './draft-session.ts'
-import { createNativeComposer, extendNativeEntry, extendNewSession, pauseInitialSelection, selectSnapshot, useNativeSnapshot } from './native-compat.ts'
+import { createNativeCommandUI, createNativeComposer, extendNativeEntry, extendNewSession, pauseInitialSelection, readNativeClientCommands, selectSnapshot, useNativeSnapshot } from './native-compat.ts'
 import { waitFor } from './wait.ts'
 
 export interface DraftHostSessions extends SessionService {
@@ -43,7 +43,9 @@ export function createDraftComposer(
   const { Shell, Root } = createNativeComposer(require)
   const options = createDraftOptions()
   const { IconButton } = createControls(React)
-  const DraftMenu = createDraftMenu(React)
+  const nativeCommands = createNativeCommandUI(require, key => (ctx as { get: (name: string) => any }).get('locale').bind('permission.access')(key))
+  let commands: ReturnType<typeof createDraftCommands>
+  let composerElement: HTMLElement | null = null
   let adopting: string | undefined
   let transferredImages: readonly string[] = []
   let disposed = false
@@ -122,6 +124,8 @@ export function createDraftComposer(
   })
   const input = new Shell({
     actx: ctx,
+    inputTriggers: () => commands,
+    popup: () => commands?.popup,
     async defaultSink(text: string, imageIds: readonly string[], _mode: unknown, signal: AbortSignal) {
       await draft.submit({ text, imageIds }, signal)
       return { kind: 'success' }
@@ -132,9 +136,11 @@ export function createDraftComposer(
       unsupportedNotice: () => '会话创建后可使用此命令',
     },
   })
+  commands = createDraftCommands(nativeCommands, options, input, () => readNativeClientCommands(ctx), () => composerElement?.querySelector('textarea')?.focus())
   const e = React.createElement
   const begin = draft.begin
   draft.begin = (targetId) => {
+    commands.close()
     if (draft.getSnapshot().phase === 'created') {
       input.notices.set(null)
       options.reset()
@@ -161,6 +167,7 @@ export function createDraftComposer(
             input.notices.set(null)
             ids.forEach(id => conversation.releaseDraftImage(id))
             options.reset()
+            commands.close()
             setConfirm(false)
           },
         }, '丢弃草稿'), e(IconButton, { icon: 'close', label: '保留草稿', onClick: () => setConfirm(false) }))
@@ -175,6 +182,7 @@ export function createDraftComposer(
       let undo: (() => void) | undefined
       const sync = (): void => {
         if (mode.getSnapshot().mode === 'official') {
+          commands.close()
           undo?.()
           undo = undefined
           draft.suspend()
@@ -212,16 +220,15 @@ export function createDraftComposer(
             const localInput = useNativeSnapshot(React, input.state)
             const localNotices = useNativeSnapshot(React, input.notices)
             const localLexicon = useNativeSnapshot(React, input.lexicon)
+            const localMenu = useNativeSnapshot(React, commands.launcher)
             const settings = React.useSyncExternalStore(options.subscribe, options.getSnapshot)
             React.useSyncExternalStore(draft.subscribe, draft.getSnapshot)
             const fileInput = React.useRef<HTMLInputElement | null>(null)
-            const [menuOpen, setMenuOpen] = React.useState(false)
             const isDraft = props.sessionId === undefined
             const busy = input.snapshot.phase === 'submitting' || input.snapshot.phase === 'adjudicating'
-            const showMenu = isDraft && !busy && menuOpen
             React.useEffect(() => {
               if (!isDraft || busy)
-                setMenuOpen(false)
+                commands.close()
             }, [isDraft, busy])
             const addImages = (files: readonly File[]): string | null => {
               try {
@@ -236,7 +243,11 @@ export function createDraftComposer(
             }
             const registry = slots as SlotsService & { entries: (key: string) => NativeEntry[] }
             const model = registry.entries('conversation.input.model').find(entry => (entry.options.priority ?? 0) === 0)
-            return e('div', { style: { display: 'contents' } }, e('input', {
+            const plan = registry.entries('conversation.input.plan').find(entry => (entry.options.priority ?? 0) === 0)
+            const locale = (ctx as { get: (name: string) => any }).get('locale')
+            return e('div', { style: { display: 'contents' }, ref: (element: HTMLElement | null) => {
+              composerElement = element
+            } }, e('input', {
               type: 'file',
               hidden: true,
               multiple: true,
@@ -253,7 +264,7 @@ export function createDraftComposer(
               useInput: selectSnapshot(isDraft ? localInput : originalInput),
               useNotices: selectSnapshot(isDraft ? localNotices : originalNotices),
               useLexicon: selectSnapshot(isDraft ? localLexicon : originalLexicon),
-              useMenuLauncher: selectSnapshot(isDraft ? showMenu ? 'command' : null : originalMenu),
+              useMenuLauncher: selectSnapshot(isDraft ? localMenu : originalMenu),
               ...(!isDraft && adopting === props.sessionId ? { disabled: true, blocked: { reason: '正在应用新会话选项…' } } : {}),
               ...(isDraft
                 ? {
@@ -261,8 +272,15 @@ export function createDraftComposer(
                     keyboard: input,
                     disabled: busy,
                     placeholder: '有什么需要一起完成？',
-                    toggleCommandMenu: () => setMenuOpen(open => !open),
-                    overlay: e(DraftMenu, { open: showMenu, onClose: () => setMenuOpen(false), onAddImages: () => fileInput.current?.click() }),
+                    toggleCommandMenu: () => commands.toggle(() => fileInput.current?.click()),
+                    overlay: e('div', {
+                      'data-dsh-draft-overlay': true,
+                      'style': { display: 'contents' },
+                      'onKeyDownCapture': (event: KeyboardEvent & { nativeEvent: KeyboardEvent }) => {
+                        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
+                          event.stopPropagation()
+                      },
+                    }, e(nativeCommands.Menu, { menu: commands.menu, onPick: commands.pick, onDismiss: commands.dismiss, t: locale.bind('slash.menu') }), e(nativeCommands.Options, { popup: commands.popup, t: locale.bind('command') })),
                     command: options.command,
                     useProjection: (key: string, selector?: (value: unknown) => unknown) => {
                       const original = props.useProjection(key, selector)
@@ -271,20 +289,21 @@ export function createDraftComposer(
                     },
                     renderSlot: (key: string, owner: Record<string, unknown>) => {
                       if (key === 'conversation.input.model' && model) {
-                        const locale = (ctx as { get: (name: string) => any }).get('locale')
                         return e(model.component, { ...owner, locked: busy, available: true, directory: options, load: options.load, select: options.select, t: locale.bind('model') })
                       }
                       if (key === 'conversation.input.plan') {
-                        return e('button', {
-                          'type': 'button',
-                          'className': 'dsh-space-draft-plan',
-                          'role': 'switch',
-                          'aria-checked': options.plan,
-                          'aria-label': '规划模式',
-                          'title': '规划模式',
-                          'disabled': busy,
-                          'onClick': () => options.setPlan(!options.plan),
-                        }, 'Plan')
+                        return plan
+                          ? e(plan.component, {
+                              ...owner,
+                              locked: busy,
+                              useProjection: () => ({ active: options.plan, pending: false }),
+                              exitPlanMode: async () => {
+                                options.setPlan(false)
+                                return null
+                              },
+                              t: locale.bind('plan'),
+                            })
+                          : null
                       }
                       return props.renderSlot(key, owner)
                     },
@@ -330,10 +349,13 @@ export function createDraftComposer(
       }
       disposers.push(sessions.list.subscribe(() => {
         const current = sessions.list.getSnapshot().current
-        if (current !== undefined && current !== adopting)
+        if (current !== undefined && current !== adopting) {
+          commands.close()
           draft.suspend()
-        else if (current === undefined && mode.getSnapshot().mode === 'space' && !draft.getSnapshot().active)
+        }
+        else if (current === undefined && mode.getSnapshot().mode === 'space' && !draft.getSnapshot().active) {
           draft.begin(draft.getSnapshot().targetId)
+        }
       }))
       disposers.push(draft.subscribe(() => {
         mode.setBlocked(draft.getSnapshot().phase === 'creating', 'draft')
@@ -353,6 +375,7 @@ export function createDraftComposer(
         draft.dispose()
         // 已交付附件由真实输入区负责，卸载不能释放另一输入区仍在使用的资源
         input.snapshot.imageIds.filter(id => !transferredImages.includes(id)).forEach(id => conversation.releaseDraftImage(id))
+        commands.dispose()
         input.dispose()
         options.dispose()
         mode.setBlocked(false, 'draft')

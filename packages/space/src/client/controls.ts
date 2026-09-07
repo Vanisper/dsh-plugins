@@ -14,7 +14,6 @@ import {
   FolderPlus,
   GitFork,
   Hash,
-  ImagePlus,
   Info,
   Layers,
   ListFilter,
@@ -30,7 +29,6 @@ import {
   Settings2,
   SquarePen,
   Star,
-  Terminal,
   Trash2,
   X,
 } from 'lucide'
@@ -54,7 +52,6 @@ const icons = {
   folderPlus: FolderPlus,
   fork: GitFork,
   info: Info,
-  image: ImagePlus,
   layers: Layers,
   loading: LoaderCircle,
   edit: Pencil,
@@ -66,7 +63,6 @@ const icons = {
   settings: Settings2,
   chat: SquarePen,
   star: Star,
-  terminal: Terminal,
   remove: Trash2,
   close: X,
 }

@@ -67,6 +67,8 @@ export function createDraftOptions(): DraftOptionStore {
           publish({
             ...state,
             ...options,
+            commands: options.commands,
+            commandError: options.commandError,
             current: selection ?? options.current,
             permissions: options.permissions && { ...options.permissions, currentValue: permission ?? options.permissions.currentValue },
             status: 'ready',

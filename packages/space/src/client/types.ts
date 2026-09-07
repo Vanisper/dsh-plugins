@@ -147,7 +147,9 @@ export interface ReactLike {
   useSyncExternalStore: <T>(subscribe: (fn: () => void) => () => void, snapshot: () => T) => T
 }
 
-/** 宿主公开状态组件，侧栏只负责状态语义与占位布局 */
+/** 宿主公开组件，保持状态与模态操作的原生外观 */
 export interface SidebarPrimitives {
   StateDot: (props: { state: 'ongoing' | 'warning' | 'done', size?: number }) => unknown
+  Modal: (props: { open: boolean, title: string, closeLabel: string, onClose: () => void, footer?: unknown, children?: unknown }) => unknown
+  Button: (props: { variant: 'outline' | 'primary', disabled?: boolean, onClick: () => void, children?: unknown }) => unknown
 }

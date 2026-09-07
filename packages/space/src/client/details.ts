@@ -13,6 +13,7 @@ interface DetailsProps {
   focus: boolean
   children?: unknown
   action?: unknown
+  meta?: unknown
   onRename: (title: string) => Promise<void>
   onClose: (reason?: 'leave') => void
   onDetachedError: (error: unknown) => void
@@ -212,6 +213,7 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
               title,
               e(Icon, { name: 'edit', size: 14 }),
             )),
+        editing ? null : props.meta,
         props.action,
       ),
       error ? e('div', { className: 'dsh-space-error', role: 'alert' }, error) : null,

@@ -142,7 +142,10 @@ export function createModeControl(
       {
         style: {
           display: 'flex',
-          padding: wide ? '6px 12px' : '4px',
+          flex: wide ? 1 : undefined,
+          minWidth: 0,
+          boxSizing: 'border-box',
+          padding: wide ? '6px 2px' : '4px',
           justifyContent: 'center',
         },
       },
@@ -154,7 +157,7 @@ export function createModeControl(
           gap: 2,
           padding: 2,
           width: wide ? '100%' : undefined,
-          maxWidth: 240,
+          boxSizing: 'border-box',
           borderRadius: 6,
           background: wide ? 'var(--dsw-alias-interactive-bg-hover, #8882)' : 'transparent',
         },
@@ -177,6 +180,7 @@ export function createModeControl(
               justifyContent: 'center',
               gap: 5,
               flex: wide ? 1 : undefined,
+              minWidth: 0,
               height: 28,
               width: wide ? undefined : 28,
               padding: wide ? '0 8px' : 0,

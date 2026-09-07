@@ -84,6 +84,7 @@ export interface MenuAction {
   disabled?: boolean
   danger?: boolean
   checked?: boolean
+  group?: string
 }
 
 interface IconProps {
@@ -199,8 +200,8 @@ export function createControls(React: ReactLike): Controls {
       }
       const rect = button.getBoundingClientRect()
       menu.showPopover()
-      const height = menu.getBoundingClientRect().height
-      menu.style.left = `${Math.max(8, Math.min(rect.right - 190, window.innerWidth - 198))}px`
+      const { height, width } = menu.getBoundingClientRect()
+      menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`
       menu.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - height - 8))}px`
       setOpen(true)
       menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
@@ -272,7 +273,10 @@ export function createControls(React: ReactLike): Controls {
             }
           },
         },
-        ...actions.map(action =>
+        ...actions.flatMap((action, index) => [
+          index > 0 && action.group !== actions[index - 1]!.group
+            ? e('div', { role: 'separator', key: `separator:${action.label}` })
+            : null,
           e(
             'button',
             {
@@ -292,7 +296,7 @@ export function createControls(React: ReactLike): Controls {
             action.label,
             action.checked ? e('span', { className: 'dsh-space-menu-check' }, e(Icon, { name: 'check', size: 14 })) : null,
           ),
-        ),
+        ]),
       ),
     )
   }

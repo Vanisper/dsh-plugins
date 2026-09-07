@@ -31,6 +31,7 @@ import {
   sessionMoveAnchor,
 } from './model.ts'
 import { observeRegistry } from './registry.ts'
+import { createRenameDialog } from './rename-dialog.ts'
 import { archivedEntries, projectGroups, sortWorkspaces } from './views.ts'
 import { waitFor } from './wait.ts'
 import { createWorkspaceEdit } from './workspace-edit.ts'
@@ -40,7 +41,7 @@ type Dialog
     | { type: 'add-directory' }
     | { type: 'invalid' }
     | { type: 'drop-invalid', kind: 'space' | 'chat', workspaceId: string }
-    | { type: 'rename-workspace', item: RegistryItem }
+    | { type: 'rename', target: Pin, title: string }
     | { type: 'delete-workspace', item: RegistryItem }
     | { type: 'drop-description', item: RegistryItem }
     | { type: 'edit-workspace', item: RegistryItem }
@@ -116,11 +117,13 @@ export function createSidebar(
   workspaces: WorkspaceService,
   mode: ModeStore,
   draft: Pick<DraftSession, 'begin' | 'subscribe' | 'getSnapshot'>,
-  { StateDot }: SidebarPrimitives,
+  primitives: SidebarPrimitives,
 ): (props: SlotProps) => unknown {
   const e = React.createElement
   const beginDraft = draft.begin
   const { Icon, IconButton, Menu, Modal } = createControls(React)
+  const { StateDot } = primitives
+  const RenameDialog = createRenameDialog(React, primitives)
   const MemberEditor = createMemberEditor(React)
   const Details = createDetails(React)
   const GroupEditor = createGroupEditor(React)
@@ -455,8 +458,8 @@ export function createSidebar(
       descriptionRemoved.current = undefined
       setError(undefined)
       setText(
-        next.type === 'rename-workspace'
-          ? next.item.title
+        next.type === 'rename'
+          ? next.title
           : next.type === 'assign-group'
             ? layout.assignments[next.session.id] ?? ''
             : '',
@@ -633,19 +636,20 @@ export function createSidebar(
       const core = item && { ...item, sessionIds: (buckets.rows.get(item.workspaceId) ?? []).filter(row => !isPinned({ kind: 'session', id: row.id })).map(row => row.id) }
       return [
         pinAction(pin),
-        ...(item && item.kind !== 'chat' ? [{ label: '查看信息', icon: 'info' as const, run: () => showInfo(pin) }] : []),
         {
           label: '重命名',
           icon: 'edit',
-          run: () => showInfo(pin, true),
+          run: () => begin({ type: 'rename', target: pin, title: session.displayTitle }),
         },
         {
           label: '设置展示分组',
+          group: 'organize',
           icon: 'hash',
           run: () => begin({ type: 'assign-group', session }),
         },
         {
           label: '分叉会话',
+          group: 'organize',
           icon: 'fork',
           disabled: session.blank,
           run: () =>
@@ -659,11 +663,12 @@ export function createSidebar(
             ),
         },
         ...(isPinned(pin)
-          ? pinnedMoves(pin)
+          ? pinnedMoves(pin).map(action => ({ ...action, group: 'order' }))
           : item?.kind === 'chat' || activeView === 'groups' || layout.workspaceSort !== 'manual'
             ? []
             : ([-1, 1] as const).map(direction => ({
                 label: direction === -1 ? '上移' : '下移',
+                group: 'order',
                 icon: direction === -1 ? ('up' as const) : ('down' as const),
                 disabled:
             !core || sessionMoveAnchor(core, session.id, direction) === null,
@@ -683,6 +688,7 @@ export function createSidebar(
               }))),
         {
           label: '归档会话',
+          group: 'archive',
           icon: 'archive',
           run: () => archive(session),
         },
@@ -690,28 +696,24 @@ export function createSidebar(
     }
     const workspaceActions = (item: RegistryItem): MenuAction[] => [
       ...(item.kind === 'chat' ? [] : [pinAction({ kind: 'workspace', id: item.workspaceId })]),
-      ...(item.kind === 'chat' ? [] : [{ label: '查看信息', icon: 'info' as const, run: () => showInfo({ kind: 'workspace', id: item.workspaceId }) }]),
       {
-        label: '新建会话',
-        icon: 'chat',
-        run: () => beginDraft(item.workspaceId),
+        label: '重命名',
+        icon: 'edit',
+        run: () => begin({ type: 'rename', target: { kind: 'workspace', id: item.workspaceId }, title: item.title }),
       },
       {
         label: '打开目录',
         icon: 'open',
+        group: 'location',
         run: () => perform(() => workspaces.openPath(item.path)),
       },
-      {
-        label: '重命名',
-        icon: 'edit',
-        run: () => item.kind === 'chat' ? begin({ type: 'rename-workspace', item }) : showInfo({ kind: 'workspace', id: item.workspaceId }, true),
-      },
       ...(isPinned({ kind: 'workspace', id: item.workspaceId })
-        ? pinnedMoves({ kind: 'workspace', id: item.workspaceId })
+        ? pinnedMoves({ kind: 'workspace', id: item.workspaceId }).map(action => ({ ...action, group: 'order' }))
         : layout.workspaceSort !== 'manual'
           ? []
           : ([-1, 1] as const).map(direction => ({
               label: direction === -1 ? '上移' : '下移',
+              group: 'order',
               icon: direction === -1 ? ('up' as const) : ('down' as const),
               disabled:
           moveAnchor(workspacePeers(item), item.workspaceId, direction)
@@ -730,6 +732,7 @@ export function createSidebar(
         ? [
             {
               label: '增强为空间',
+              group: 'edit',
               icon: 'layers' as const,
               disabled: !registry,
               run: () =>
@@ -744,6 +747,7 @@ export function createSidebar(
         ? [
             {
               label: '编辑工作区',
+              group: 'edit',
               icon: 'settings' as const,
               run: () => begin({ type: 'edit-workspace', item }),
             },
@@ -753,6 +757,7 @@ export function createSidebar(
         ? [
             {
               label: '移除附加描述',
+              group: 'remove',
               icon: 'folder' as const,
               run: () => begin({ type: 'drop-description', item }),
             },
@@ -760,6 +765,7 @@ export function createSidebar(
         : []),
       {
         label: '移除工作区',
+        group: 'remove',
         icon: 'remove',
         danger: true,
         disabled: !registry,
@@ -1129,7 +1135,7 @@ export function createSidebar(
             document.querySelector<HTMLButtonElement>(`[aria-label="${next === 'workspaces' ? '项目视图' : '分组视图'}"]`)?.focus()
           }
         },
-      }, e(Icon, { name: view === 'workspaces' ? 'folder' : 'hash', size: 14 }), view === 'workspaces' ? '项目' : '分组'))), e(IconButton, { icon: 'search', label: '搜索', disabled: busy || !!dialog, onClick: openSearch }), archiveOpen
+      }, e(Icon, { name: view === 'workspaces' ? 'folder' : 'hash', size: 14 }), view === 'workspaces' ? '项目' : '分组'))), e('span', { className: 'dsh-space-toolbar-spacer' }), e(IconButton, { icon: 'search', label: '搜索', disabled: busy || !!dialog, onClick: openSearch }), archiveOpen
         ? null
         : activeView === 'workspaces'
           ? e(IconButton, {
@@ -1138,7 +1144,7 @@ export function createSidebar(
               disabled: busy || !workspaceIds.length,
               onClick: () => setCollapsed(old => anyOpen ? [...new Set([...old, ...workspaceIds])] : old.filter(id => !workspaceIds.includes(id))),
             })
-          : e(IconButton, { icon: 'hash', label: '新建分组', disabled: busy, onClick: () => editGroup() }), e('span', { className: 'dsh-space-toolbar-spacer' }), e(Menu, { icon: 'filter', label: '排序方式', disabled: busy, actions: archiveOpen
+          : e(IconButton, { icon: 'hash', label: '新建分组', disabled: busy, onClick: () => editGroup() }), e(Menu, { icon: 'filter', label: '排序方式', disabled: busy, actions: archiveOpen
         ? archiveSortActions()
         : activeView === 'workspaces'
           ? [
@@ -1285,21 +1291,24 @@ export function createSidebar(
           ),
         )
       }
-      if (dialog.type === 'rename-workspace') {
-        const old = dialog.item.title
+      if (dialog.type === 'rename') {
         return e(
-          Modal,
+          RenameDialog,
           {
             ...props,
-            title: '重命名工作区',
-            submitDisabled: !text.trim() || text.trim() === old,
+            title: dialog.target.kind === 'workspace' ? '重命名工作区' : '重命名会话',
+            value: text,
+            disabled: !text.trim() || text.trim() === dialog.title,
+            onChange: (value: string) => {
+              setText(value)
+              setError(undefined)
+            },
             onSubmit: () =>
               perform(
-                () => rename({ kind: 'workspace', id: dialog.item.workspaceId }, text.trim()),
+                () => rename(dialog.target, text.trim()),
                 () => setDialog(null),
               ),
           },
-          input('名称'),
         )
       }
       if (dialog.type === 'edit-workspace') {
@@ -1540,6 +1549,9 @@ export function createSidebar(
           onRename: (title: string) => rename(target, title),
           onDetachedError: (cause: unknown) => setError(message(cause)),
           onEnter: stopInfoTimer,
+          meta: session && !session.blank && Number.isFinite(session.updatedAt)
+            ? e('time', { className: 'dsh-space-detail-time', dateTime: new Date(session.updatedAt).toISOString(), title: new Date(session.updatedAt).toLocaleString() }, updatedLabel(session.updatedAt))
+            : null,
           action: !session || info.focus || info.edit
             ? e(IconButton, {
                 icon: isPinned(target) ? 'unpin' : 'pin',
@@ -1556,9 +1568,6 @@ export function createSidebar(
           ? e(
               'div',
               { className: 'dsh-space-detail-meta' },
-              !session.blank && Number.isFinite(session.updatedAt)
-                ? e('time', { className: 'dsh-space-muted', dateTime: new Date(session.updatedAt).toISOString(), title: new Date(session.updatedAt).toLocaleString() }, updatedLabel(session.updatedAt))
-                : null,
               e('div', { className: 'dsh-space-detail-status' }, e(StateDot, { state: status!.state }), status!.label),
               row?.runningSubagentCount && (session.running || session.pendingInteraction)
                 ? e('div', { className: 'dsh-space-detail-status' }, e(StateDot, { state: 'ongoing' }), `${row.runningSubagentCount} 个子代理运行中`)

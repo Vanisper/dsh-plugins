@@ -146,7 +146,21 @@ async function mount(wide = true) {
     workspaces,
     mode,
     draft,
-    { StateDot: ({ state }) => createElement('span', { 'data-native-state': state, 'aria-hidden': true }) },
+    {
+      StateDot: ({ state }) => createElement('span', { 'data-native-state': state, 'aria-hidden': true }),
+      Modal: ({ title, onClose, children, footer }) => {
+        React.useEffect(() => {
+          const escape = (event: KeyboardEvent): void => {
+            if (event.key === 'Escape')
+              onClose()
+          }
+          document.addEventListener('keydown', escape)
+          return () => document.removeEventListener('keydown', escape)
+        }, [onClose])
+        return createElement('dialog', { 'open': true, 'role': 'dialog', 'aria-label': title }, children as React.ReactNode, footer as React.ReactNode)
+      },
+      Button: ({ onClick, disabled, children }) => createElement('button', { type: 'button', onClick, disabled }, children as React.ReactNode),
+    },
   )
   const host = document.createElement('div')
   document.body.append(host)
@@ -164,6 +178,21 @@ async function mount(wide = true) {
     draft.dispose()
   }
   return { sessions, workspaces, mode, draft, beginDraft, item, workspaceSnapshot, sessionSnapshot, setWide }
+}
+
+async function hoverInfo(target: 'workspace' | 'session' = 'workspace'): Promise<void> {
+  const fake = vi.isFakeTimers()
+  if (!fake)
+    vi.useFakeTimers()
+  const selector = target === 'workspace' ? '.dsh-space-heading' : '.dsh-space-session-main'
+  await act(async () => {
+    const event = new MouseEvent('pointerover', { bubbles: true })
+    Object.assign(event, { pointerType: 'mouse' })
+    document.querySelector(selector)!.dispatchEvent(event)
+  })
+  await act(async () => vi.advanceTimersByTimeAsync(500))
+  if (!fake)
+    vi.useRealTimers()
 }
 
 function button(label: string): HTMLButtonElement {
@@ -323,7 +352,7 @@ it('成员只在浮层展示，主成员排首位且不重复名称路径或主�
   const { workspaces, item } = await mount()
   await registry({ ...fixture.registry!, items: [{ ...item, primary: '/b', members: [{ path: '/a', mode: 'reference' }, { path: '/b', mode: 'reference', title: '后端' }] }] })
   expect(document.querySelector('.dsh-space-member-summary')).toBeNull()
-  await click('查看信息')
+  await hoverInfo()
   const panel = document.querySelector('.dsh-space-details')!
   expect(panel.querySelector('.dsh-space-detail-status')?.textContent).toBe('1 个会话 · 空间')
   expect(panel.textContent).toContain('成员目录')
@@ -351,7 +380,8 @@ it('会话悬浮预览只展示摘要，移入后仍可原位改名', async () =
   const panel = document.querySelector('.dsh-space-details.session')!
   expect(panel.querySelector('.dsh-space-details-actions')).toBeNull()
   expect(panel.querySelector('.dsh-space-detail-status')?.textContent).toBe('空闲')
-  expect(panel.querySelector('time')).not.toBeNull()
+  expect(panel.querySelector('.dsh-space-details-header>time')).not.toBeNull()
+  expect(panel.querySelector('.dsh-space-details-body time')).toBeNull()
   await act(async () => panel.querySelector<HTMLButtonElement>('.dsh-space-details-title')!.click())
   expect(document.querySelector('input[aria-label="名称"]')).not.toBeNull()
 })
@@ -365,7 +395,7 @@ it('浮层路径按目录分段，保留中文、连字符和 Windows 分隔符'
     ['/', ['/']],
   ] as const
   await registry({ ...fixture.registry!, items: [{ ...item, primary: undefined, members: paths.map(([path]) => ({ path, mode: 'reference' })) }] })
-  await click('查看信息')
+  await hoverInfo()
   const codes = document.querySelectorAll('.dsh-space-detail-member code')
   paths.forEach(([path, parts], index) => {
     expect(codes[index]!.textContent).toBe(path)
@@ -375,6 +405,98 @@ it('浮层路径按目录分段，保留中文、连字符和 Windows 分隔符'
 })
 
 describe('侧栏交互', () => {
+  it('更多菜单向右展开，按操作分组且不重复信息和新建入口', async () => {
+    await mount()
+    const trigger = button('演示空间 工作区操作')
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({ left: 236, right: 260, bottom: 100 } as DOMRect)
+    await act(async () => trigger.click())
+    const menu = document.querySelector<HTMLElement>('.dsh-space-head [role="menu"]')!
+    expect(menu.style.left).toBe('236px')
+    expect(menu.textContent).not.toContain('查看信息')
+    expect(menu.textContent).not.toContain('新建会话')
+    expect(menu.querySelectorAll('[role="separator"]').length).toBeGreaterThan(0)
+  })
+
+  it('菜单工作区改名打开模态并选中名称，取消不提交', async () => {
+    const { workspaces } = await mount()
+    await click('重命名')
+    expect(document.querySelector('[role="dialog"][aria-label="重命名工作区"]')).not.toBeNull()
+    expect(document.querySelector('.dsh-space-details')).toBeNull()
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="名称"]')!
+    expect(field.selectionStart).toBe(0)
+    expect(field.selectionEnd).toBe(field.value.length)
+    await input('名称', '取消改名')
+    await click('取消')
+    expect(workspaces.rename).not.toHaveBeenCalled()
+  })
+
+  it('更多菜单靠近视口边界时收回，键盘导航跳过分隔线和禁用项', async () => {
+    await mount()
+    const trigger = button('演示空间 工作区操作')
+    const menu = document.querySelector<HTMLElement>('.dsh-space-head [role="menu"]')!
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({ left: 1000, bottom: 750 } as DOMRect)
+    vi.spyOn(menu, 'getBoundingClientRect').mockReturnValue({ width: 184, height: 260 } as DOMRect)
+    await act(async () => trigger.click())
+    expect(menu.style.left).toBe(`${window.innerWidth - 192}px`)
+    expect(menu.style.top).toBe(`${window.innerHeight - 268}px`)
+    await act(async () => menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
+    expect(document.activeElement?.textContent).toBe('移除工作区')
+    await act(async () => menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    expect(document.activeElement?.textContent).toBe('置顶')
+  })
+
+  it.each(['composition', 'isComposing', '229'] as const)('模态改名不会把输入法确认作为提交：%s', async (kind) => {
+    const { workspaces } = await mount()
+    await click('重命名')
+    expect(button('重命名').disabled).toBe(true)
+    await input('名称', 'ceshi')
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="名称"]')!
+    await act(async () => {
+      field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+      if (kind !== 'composition')
+        field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+      for (const key of ['Enter', 'Escape'])
+        field.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, isComposing: kind === 'isComposing', keyCode: kind === '229' ? 229 : 13 }))
+    })
+    expect(field.isConnected).toBe(true)
+    expect(workspaces.rename).not.toHaveBeenCalled()
+    await act(async () => {
+      field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+      field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(workspaces.rename).toHaveBeenCalledExactlyOnceWith('w', 'ceshi')
+    expect(field.isConnected).toBe(false)
+  })
+
+  it('会话模态改名失败保留草稿，重试防重入并恢复菜单入口焦点', async () => {
+    const { sessions, mode } = await mount()
+    const rename = vi.fn().mockResolvedValueOnce({ ok: false, error: { message: '离线' } })
+    let finish!: (value: { ok: boolean }) => void
+    vi.mocked(sessions.binding).mockReturnValue({ session: { rename } })
+    const trigger = button('已有会话 会话操作')
+    await act(async () => trigger.click())
+    const menu = document.querySelector('.dsh-space-session [role="menu"]')!
+    await act(async () => Array.from(menu.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent === '重命名')!.click())
+    await input('名称', '新名称')
+    await click('重命名')
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('离线')
+    expect(document.querySelector<HTMLInputElement>('[aria-label="名称"]')?.value).toBe('新名称')
+    rename.mockReset().mockImplementation(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+    await act(async () => {
+      button('重命名').click()
+      button('重命名').click()
+    })
+    expect(rename).toHaveBeenCalledExactlyOnceWith('新名称')
+    expect(button('取消').disabled).toBe(true)
+    expect(mode.getSnapshot().blocked).toBe(true)
+    await act(async () => finish({ ok: true }))
+    expect(document.querySelector('[aria-label="重命名会话"]')).toBeNull()
+    expect(mode.getSnapshot().blocked).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+  })
+
   it('项目行只保留开合文件夹图标，折叠切换不改变类型或会话', async () => {
     const { workspaces, sessions } = await mount()
     const heading = document.querySelector<HTMLButtonElement>('.dsh-space-heading')!
@@ -400,7 +522,7 @@ describe('侧栏交互', () => {
 
   it.each(['composition', 'isComposing', '229'] as const)('输入法确认不隐式提交改名，独立 Enter 才保存：%s', async (kind) => {
     const { workspaces } = await mount()
-    await click('查看信息')
+    await hoverInfo()
     await click('演示空间')
     await input('名称', 'ceshi')
     const field = document.querySelector<HTMLInputElement>('input[aria-label="名称"]')!
@@ -429,7 +551,7 @@ describe('侧栏交互', () => {
 
   it('输入法 Escape 只取消候选，不退出名称编辑', async () => {
     await mount()
-    await click('查看信息')
+    await hoverInfo()
     await click('演示空间')
     const field = document.querySelector<HTMLInputElement>('input[aria-label="名称"]')!
     await act(async () => {
@@ -726,7 +848,7 @@ describe('侧栏交互', () => {
 
   it('改名时类型图标属于编辑区，点击其他操作则取消草稿且执行该操作', async () => {
     const { workspaces, mode } = await mount()
-    await click('查看信息')
+    await hoverInfo()
     await click('演示空间')
     await input('名称', '未提交')
     const editor = document.querySelector<HTMLInputElement>('[aria-label="名称"]')!
@@ -746,7 +868,7 @@ describe('侧栏交互', () => {
     vi.useFakeTimers()
     const { workspaces } = await mount()
     for (const type of ['click', 'pointerout']) {
-      await click('查看信息')
+      await hoverInfo()
       await click('演示空间')
       await input('名称', '未提交')
       await act(async () => {
@@ -767,12 +889,12 @@ describe('侧栏交互', () => {
     vi.mocked(workspaces.rename).mockImplementationOnce(() => new Promise((_, fail) => {
       reject = fail
     }))
-    await click('查看信息')
+    await hoverInfo()
     await click('演示空间')
     await input('名称', '正在保存')
     await click('保存名称')
     await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })))
-    await click('查看信息')
+    await hoverInfo()
     await click('演示空间')
     await input('名称', '第二次')
     await click('保存名称')
@@ -801,7 +923,7 @@ describe('侧栏交互', () => {
 
   it('工作区改名失败保留草稿，不锁定模式或其他操作', async () => {
     const { mode, workspaces } = await mount()
-    await click('查看信息')
+    await hoverInfo()
     expect(document.querySelector('[aria-label="工作区信息"]')?.textContent).toContain('/workspace')
     await click('演示空间')
     await input('名称', '改名后的空间')
@@ -824,10 +946,8 @@ describe('侧栏交互', () => {
       finish = resolve
     }))
     vi.mocked(sessions.binding).mockReturnValue({ session: { rename } })
-    await act(async () => {
-      const menu = document.querySelector('.dsh-space-session [role="menu"]')!
-      Array.from(menu.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent === '重命名')!.click()
-    })
+    await hoverInfo('session')
+    await act(async () => document.querySelector<HTMLButtonElement>('.dsh-space-details-title')!.click())
     expect(document.querySelector('[aria-label="会话信息"]')?.textContent).toContain('演示空间')
     await input('名称', '会话新名称')
     await act(async () => {
@@ -845,7 +965,7 @@ describe('侧栏交互', () => {
 
   it('escape 取消未提交改名并关闭信息，恢复行焦点', async () => {
     const { workspaces, mode } = await mount()
-    await click('查看信息')
+    await hoverInfo()
     await click('演示空间')
     await input('名称', '未保存')
     await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
@@ -856,11 +976,11 @@ describe('侧栏交互', () => {
     expect(workspaces.rename).not.toHaveBeenCalled()
   })
 
-  it('独立对话原位改名不展示虚构的项目归属信息', async () => {
+  it('独立对话使用重命名模态，不展示虚构的项目归属信息', async () => {
     const { item } = await mount()
     await registry({ ...fixture.registry!, items: [{ ...item, kind: 'chat' }] })
     await click('重命名')
-    const info = document.querySelector('[aria-label="会话信息"]')!
+    const info = document.querySelector('[aria-label="重命名会话"]')!
     expect(info).not.toBeNull()
     expect(info.textContent).not.toContain('演示空间')
     expect(document.querySelector('[aria-label="名称"]')).not.toBeNull()
@@ -868,7 +988,7 @@ describe('侧栏交互', () => {
 
   it('宿主收起侧栏时取消原位编辑，不留存脱离锚点的浮层', async () => {
     const { setWide, mode } = await mount()
-    await click('查看信息')
+    await hoverInfo()
     await click('演示空间')
     await input('名称', '保留草稿')
     await setWide(false)
@@ -879,11 +999,11 @@ describe('侧栏交互', () => {
 
   it('打开上下文菜单或跳转会话会关闭只读信息，不重叠两个弹层', async () => {
     await mount()
-    await click('查看信息')
+    await hoverInfo()
     await act(async () => document.querySelector('.dsh-space-head')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))
     expect(document.querySelector('.dsh-space-details')).toBeNull()
     expect(button('演示空间 工作区操作').getAttribute('aria-expanded')).toBe('true')
-    await click('查看信息')
+    await hoverInfo()
     await click('已有会话')
     expect(document.querySelector('.dsh-space-details')).toBeNull()
   })
@@ -1165,7 +1285,7 @@ describe('侧栏交互', () => {
 
   it('重命名时点击编辑工作区，取消临时名称并执行入口操作', async () => {
     const { workspaces } = await mount()
-    await click('查看信息')
+    await hoverInfo()
     await click('演示空间')
     await input('名称', '不提交')
     await act(async () => document.querySelector<HTMLButtonElement>('.dsh-space-detail-edit')!.click())

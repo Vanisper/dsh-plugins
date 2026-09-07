@@ -10,6 +10,7 @@ import { act, createElement } from 'react'
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createDraftSession } from './draft-session.ts'
 import { createLayoutStore } from './layout.ts'
 import { createModeStore } from './mode.ts'
 import { createSidebar } from './sidebar.ts'
@@ -88,7 +89,7 @@ async function mount(wide = true) {
       },
     },
     phase: 'ready' as const,
-    current: 's',
+    current: 's' as string | undefined,
   }
   const workspaceSnapshot = {
     items: [item],
@@ -123,13 +124,20 @@ async function mount(wide = true) {
     archiveSession: vi.fn(),
   } as unknown as WorkspaceService
   const mode = createModeStore()
-  const beginDraft = vi.fn()
+  const draft = createDraftSession({
+    clearSelection: () => { sessionSnapshot.current = undefined },
+    allocate: vi.fn(),
+    create: vi.fn(),
+    adopt: vi.fn(),
+  })
+  const beginDraft = vi.fn(draft.begin)
+  draft.begin = beginDraft
   const Sidebar = createSidebar(
     React as unknown as ReactLike,
     sessions,
     workspaces,
     mode,
-    beginDraft,
+    draft,
   )
   const host = document.createElement('div')
   document.body.append(host)
@@ -144,8 +152,9 @@ async function mount(wide = true) {
   await setWide(wide)
   cleanup = async () => {
     await act(async () => root.unmount())
+    draft.dispose()
   }
-  return { sessions, workspaces, mode, beginDraft, item, workspaceSnapshot, sessionSnapshot, setWide }
+  return { sessions, workspaces, mode, draft, beginDraft, item, workspaceSnapshot, sessionSnapshot, setWide }
 }
 
 function button(label: string): HTMLButtonElement {
@@ -181,6 +190,91 @@ async function registry(value: RegistryPayload | undefined): Promise<void> {
 }
 
 describe('侧栏交互', () => {
+  it('项目草稿高亮项目标题，不创建或选中虚构会话', async () => {
+    const { draft, sessions } = await mount()
+    await act(async () => draft.begin('w'))
+    const heading = document.querySelector<HTMLButtonElement>('.dsh-space-heading')!
+    expect(heading.getAttribute('aria-current')).toBe('location')
+    expect(heading.closest('.dsh-space-head')?.classList.contains('current')).toBe(true)
+    expect(document.querySelectorAll('.dsh-space-session')).toHaveLength(1)
+    expect(document.querySelector('.dsh-space-session.current')).toBeNull()
+    expect(sessions.open).not.toHaveBeenCalled()
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('改选草稿目标即时移动高亮，独立草稿和真实会话不高亮后台项目', async () => {
+    const { draft, item, workspaceSnapshot, sessionSnapshot } = await mount()
+    workspaceSnapshot.items.push({ ...item, kind: 'plain', workspaceId: 'other', title: '另一项目', path: '/other', sessionIds: [] })
+    await registry({ ...fixture.registry! })
+    const editor = document.createElement('textarea')
+    document.body.append(editor)
+    editor.focus()
+    await act(async () => draft.begin('w'))
+    await act(async () => draft.setTarget('other'))
+    expect(document.querySelectorAll('.dsh-space-head.current')).toHaveLength(1)
+    expect(document.querySelector('.dsh-space-heading[aria-current="location"]')?.textContent).toContain('另一项目')
+    expect(document.activeElement).toBe(editor)
+    await act(async () => draft.setTarget())
+    expect(document.querySelector('.dsh-space-head.current')).toBeNull()
+    await act(async () => draft.setTarget('w'))
+    sessionSnapshot.current = 's'
+    await act(async () => draft.suspend())
+    expect(document.querySelector('.dsh-space-head.current')).toBeNull()
+    expect(button('已有会话').getAttribute('aria-current')).toBe('page')
+  })
+
+  it.each([false, true])('草稿目标保留在长列表中，所属分区展开且仅有一个高亮（置顶：%s）', async (pinned) => {
+    const { draft, item, workspaceSnapshot } = await mount()
+    const layout = createLayoutStore()
+    const projects = Array.from({ length: 7 }, (_, index): RegistryItem => ({
+      kind: 'plain',
+      workspaceId: `w${index}`,
+      title: `项目${index}`,
+      path: `/w${index}`,
+      sessionIds: [],
+    }))
+    workspaceSnapshot.items = [item, ...projects]
+    await registry({ ...fixture.registry! })
+    await act(async () => {
+      if (pinned)
+        projects.forEach(project => layout.setPinned({ kind: 'workspace', id: project.workspaceId }, true))
+      layout.setCollapsed(pinned ? 'pinned' : 'workspaces', true)
+    })
+    await act(async () => draft.begin('w6'))
+    const heading = document.querySelector('.dsh-space-heading[aria-current="location"]')!
+    expect(heading.textContent).toContain('项目6')
+    expect(heading.closest('[data-section]')?.getAttribute('data-section')).toBe(pinned ? 'pinned' : 'workspaces')
+    expect(document.querySelectorAll('.dsh-space-head.current')).toHaveLength(1)
+    expect(workspaceSnapshot.items.map(item => item.workspaceId)).toEqual(['w', ...projects.map(project => project.workspaceId)])
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('草稿项目可手动折叠，描述同步和重选同一目标不强制展开', async () => {
+    const { draft } = await mount()
+    await act(async () => draft.begin('w'))
+    const heading = document.querySelector<HTMLButtonElement>('.dsh-space-heading')!
+    await act(async () => heading.click())
+    await registry({ ...fixture.registry! })
+    await act(async () => draft.setTarget('w'))
+    expect(heading.getAttribute('aria-expanded')).toBe('false')
+    expect(heading.getAttribute('aria-current')).toBe('location')
+    expect(document.querySelector('.dsh-space-session')).toBeNull()
+  })
+
+  it('分组视图和失效目标不补造项目，返回工作区视图恢复高亮', async () => {
+    const { draft, workspaceSnapshot } = await mount()
+    await act(async () => draft.begin('w'))
+    await click('分组视图')
+    expect(document.querySelector('.dsh-space-head')).toBeNull()
+    expect(document.querySelectorAll('.dsh-space-session')).toHaveLength(1)
+    await click('工作区视图')
+    expect(document.querySelector('.dsh-space-head.current')).not.toBeNull()
+    workspaceSnapshot.items = []
+    await registry({ ...fixture.registry! })
+    expect(document.querySelector('.dsh-space-head')).toBeNull()
+    expect(draft.getSnapshot().targetId).toBe('w')
+  })
+
   it('独立对话和工作区新会话只开始草稿，不分配目录或会话', async () => {
     const { beginDraft, workspaces } = await mount()
     await click('新建独立对话')

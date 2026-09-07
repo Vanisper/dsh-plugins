@@ -57,7 +57,7 @@ export const sidebarCss = `
 .dsh-space-planned-notice{display:flex;align-items:flex-start;gap:6px;padding:6px;font-size:11px;color:var(--dsw-alias-label-tertiary,#777)}
 .dsh-space-planned-notice svg{flex:none;margin-top:2px}
 .dsh-space-session.flat{padding-left:6px}
-.dsh-space-head:hover{background:var(--dsw-alias-interactive-bg-hover,#8882)}
+.dsh-space-head:hover,.dsh-space-head.current{background:var(--dsw-alias-interactive-bg-hover,#8882)}
 .dsh-space-session:hover,.dsh-space-session.current{background:var(--dsw-alias-interactive-bg-hover,#8882)}
 .dsh-space-session.current .dsh-space-session-title{font-weight:600}
 .dsh-space-session-main{display:flex;align-items:center;gap:8px;min-width:0;flex:1;border:0;background:transparent;text-align:left;color:inherit;padding:6px 0;min-height:32px}

@@ -51,7 +51,7 @@ loader?.load({
       try {
         const composer = createDraftComposer(React, require, ctx, slots, sessions, workspaces, conversation)
         const WorkspacePicker = createHostWorkspacePicker(React, workspaces)
-        const Sidebar = createSidebar(React, sessions, workspaces, mode, composer.draft.begin)
+        const Sidebar = createSidebar(React, sessions, workspaces, mode, composer.draft)
         const ModeControl = createModeControl(React, mode)
         ctx.effect(() => {
           const disposers: Array<() => void> = []

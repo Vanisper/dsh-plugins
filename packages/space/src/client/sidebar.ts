@@ -1,4 +1,5 @@
 import type { MenuAction } from './controls.ts'
+import type { DraftSession } from './draft-session.ts'
 import type { DisplayGroup, LayoutEntry, Pin, SectionId, SidebarView } from './layout.ts'
 import type { MemberDraft } from './member-editor.ts'
 import type { ModeStore } from './mode.ts'
@@ -96,9 +97,10 @@ export function createSidebar(
   sessions: SessionService,
   workspaces: WorkspaceService,
   mode: ModeStore,
-  beginDraft: (workspaceId?: string) => void,
+  draft: Pick<DraftSession, 'begin' | 'subscribe' | 'getSnapshot'>,
 ): (props: SlotProps) => unknown {
   const e = React.createElement
+  const beginDraft = draft.begin
   const { Icon, IconButton, Menu, Modal } = createControls(React)
   const MemberEditor = createMemberEditor(React)
   const Details = createDetails(React)
@@ -172,6 +174,8 @@ export function createSidebar(
       subscribeSessions,
       readSessions,
     )
+    const draftState = React.useSyncExternalStore(draft.subscribe, draft.getSnapshot)
+    const draftWorkspaceId = sessionState.current === undefined && draftState.active ? draftState.targetId : undefined
     const workspaceState = React.useSyncExternalStore(
       subscribeWorkspaces,
       readWorkspaces,
@@ -191,7 +195,7 @@ export function createSidebar(
     const groups = React.useMemo(() => projectGroups(items, buckets, layout), [items, buckets, layout])
     const ownsCurrent = (entry: LayoutEntry): boolean => entry.kind === 'session'
       ? entry.session.id === sessionState.current
-      : entry.rows.some(row => row.id === sessionState.current)
+      : entry.item.workspaceId === draftWorkspaceId || entry.rows.some(row => row.id === sessionState.current)
     const currentSection = layout.sections.find(id => sections[id].some(ownsCurrent))
     const currentGroup = layout.assignments[sessionState.current ?? '']
     React.useEffect(() => {
@@ -263,14 +267,14 @@ export function createSidebar(
       }
     }, [collapsed])
     React.useEffect(() => {
-      const owner = workspaceState.items.find(item =>
-        item.sessionIds.includes(sessionState.current ?? ''),
-      )
+      const owner = workspaceState.items.find(item => draftWorkspaceId !== undefined
+        ? item.workspaceId === draftWorkspaceId
+        : item.sessionIds.includes(sessionState.current ?? ''))
       if (owner)
         setCollapsed(old => old.filter(id => id !== owner.workspaceId))
       if (currentSection)
         layoutStore.setCollapsed(currentSection, false)
-    }, [sessionState.current, currentSection])
+    }, [sessionState.current, currentSection, draftWorkspaceId])
     React.useEffect(() => {
       if (wide && focusSearch.current) {
         searchInput.current?.focus()
@@ -866,7 +870,7 @@ export function createSidebar(
         },
         e(
           'div',
-          { className: 'dsh-space-head', onContextMenu: openContextMenu, onPointerLeave: leaveInfo },
+          { className: `dsh-space-head${item.workspaceId === draftWorkspaceId ? ' current' : ''}`, onContextMenu: openContextMenu, onPointerLeave: leaveInfo },
           e(
             'button',
             {
@@ -875,6 +879,7 @@ export function createSidebar(
               'ref': anchorRef({ kind: 'workspace', id: item.workspaceId }),
               'disabled': busy,
               'aria-expanded': open,
+              'aria-current': item.workspaceId === draftWorkspaceId ? 'location' : undefined,
               'title': item.title,
               'onPointerEnter': (event: PointerEvent) => {
                 if (event.pointerType === 'mouse')

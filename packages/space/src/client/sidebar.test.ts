@@ -517,11 +517,11 @@ describe('侧栏交互', () => {
     expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
   })
 
-  it('工作区悬停延迟打开浮层，移入可操作，离开即时关闭', async () => {
+  it('工作区浮层允许限时绕行，进入面板取消关闭，停在途中则关闭', async () => {
     vi.useFakeTimers()
     await mount()
     const pointer = (type: string, target: Element): void => {
-      const event = new MouseEvent(type, { bubbles: true })
+      const event = new MouseEvent(type, { bubbles: true, clientX: 100, clientY: 100 })
       Object.defineProperty(event, 'pointerType', { value: 'mouse' })
       target.dispatchEvent(event)
     }
@@ -533,11 +533,63 @@ describe('侧栏交互', () => {
     const panel = document.querySelector('.dsh-space-details')!
     expect(panel).not.toBeNull()
     await act(async () => pointer('pointerout', heading))
+    await act(async () => pointer('pointerover', document.querySelector('.dsh-space-session-main')!))
+    await act(async () => pointer('pointermove', document.body))
+    await act(async () => vi.advanceTimersByTimeAsync(150))
+    expect(document.querySelector('.dsh-space-details')).toBe(panel)
     await act(async () => pointer('pointerover', panel))
-    await act(async () => vi.advanceTimersByTimeAsync(300))
+    await act(async () => vi.advanceTimersByTimeAsync(600))
     expect(document.querySelector('.dsh-space-details')).toBe(panel)
     await act(async () => pointer('pointerout', panel))
+    expect(document.querySelector('.dsh-space-details')).toBe(panel)
+    await act(async () => vi.advanceTimersByTimeAsync(250))
     expect(document.querySelector('.dsh-space-details')).toBeNull()
+
+    await act(async () => pointer('pointerover', heading))
+    await act(async () => vi.advanceTimersByTimeAsync(500))
+    expect(document.querySelector('.dsh-space-details')).not.toBeNull()
+    await act(async () => pointer('pointerout', heading))
+    await act(async () => pointer('pointerover', document.body))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    expect(document.querySelector('.dsh-space-details')).toBeNull()
+  })
+
+  it('直接悬停项目右侧控件也打开信息，短暂经过不打开', async () => {
+    vi.useFakeTimers()
+    await mount()
+    const control = button('在 演示空间 中新建会话')!
+    const pointer = (type: string): void => {
+      const event = new MouseEvent(type, { bubbles: true })
+      Object.assign(event, { pointerType: 'mouse' })
+      control.dispatchEvent(event)
+    }
+    await act(async () => pointer('pointerover'))
+    await act(async () => vi.advanceTimersByTimeAsync(100))
+    await act(async () => pointer('pointerout'))
+    await act(async () => vi.advanceTimersByTimeAsync(500))
+    expect(document.querySelector('.dsh-space-details')).toBeNull()
+    await act(async () => pointer('pointerover'))
+    await act(async () => vi.advanceTimersByTimeAsync(500))
+    expect(document.querySelector('[aria-label="工作区信息"]')).not.toBeNull()
+  })
+
+  it('上一浮层超时关闭不取消下一行的悬停打开', async () => {
+    vi.useFakeTimers()
+    await mount()
+    const pointer = (type: string, target: Element): void => {
+      const event = new MouseEvent(type, { bubbles: true })
+      Object.assign(event, { pointerType: 'mouse' })
+      target.dispatchEvent(event)
+    }
+    const heading = document.querySelector('.dsh-space-heading')!
+    await act(async () => pointer('pointerover', heading))
+    await act(async () => vi.advanceTimersByTimeAsync(500))
+    await act(async () => pointer('pointerout', heading))
+    await act(async () => pointer('pointerover', document.querySelector('.dsh-space-session-main')!))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    expect(document.querySelector('.dsh-space-details')).toBeNull()
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    expect(document.querySelector('[aria-label="会话信息"]')).not.toBeNull()
   })
 
   it('改名时类型图标属于编辑区，点击其他操作则取消草稿且执行该操作', async () => {
@@ -558,7 +610,8 @@ describe('侧栏交互', () => {
     expect(document.querySelector('.dsh-space-details')).toBeNull()
   })
 
-  it('改名时点击空白区或离开面板即时关闭，不隐式保存', async () => {
+  it('改名时点击空白区关闭，离开面板超时关闭，不隐式保存', async () => {
+    vi.useFakeTimers()
     const { workspaces } = await mount()
     for (const type of ['click', 'pointerout']) {
       await click('查看信息')
@@ -569,6 +622,8 @@ describe('侧栏交互', () => {
         Object.defineProperty(event, 'pointerType', { value: 'mouse' })
         document.querySelector('.dsh-space-details-body')!.dispatchEvent(event)
       })
+      if (type === 'pointerout')
+        await act(async () => vi.advanceTimersByTimeAsync(250))
       expect(document.querySelector('.dsh-space-details')).toBeNull()
     }
     expect(workspaces.rename).not.toHaveBeenCalled()

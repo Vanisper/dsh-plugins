@@ -369,8 +369,11 @@ export function createSidebar(
       if (!anchor?.isConnected)
         return
       const show = (): void => {
-        if (anchor.isConnected && !busyRef.current)
-          setInfo({ target, anchor, edit, focus: !hover })
+        if (anchor.isConnected && !busyRef.current) {
+          setInfo(current => hover && current?.target.kind === target.kind && current.target.id === target.id
+            ? current
+            : { target, anchor, edit, focus: !hover })
+        }
       }
       if (hover)
         infoTimer.current = setTimeout(show, 450)
@@ -780,6 +783,10 @@ export function createSidebar(
           'key': session.id,
           'onContextMenu': openContextMenu,
           'onPointerLeave': stopInfoTimer,
+          'onPointerEnter': (event: PointerEvent) => {
+            if (event.pointerType === 'mouse' && item && item.kind !== 'chat')
+              showInfo({ kind: 'session', id: session.id }, false, true)
+          },
         },
         e(
           'button',
@@ -790,10 +797,6 @@ export function createSidebar(
             'disabled': busy,
             'aria-current':
               sessionState.current === session.id ? 'page' : undefined,
-            'onPointerEnter': (event: PointerEvent) => {
-              if (event.pointerType === 'mouse' && item && item.kind !== 'chat')
-                showInfo({ kind: 'session', id: session.id }, false, true)
-            },
             'draggable': !busy && (activeView === 'groups' || isPinned({ kind: 'session', id: session.id })),
             'onDragStart': (event: DragEvent) => {
               if (activeView === 'groups')
@@ -901,7 +904,15 @@ export function createSidebar(
         },
         e(
           'div',
-          { className: `dsh-space-head${item.workspaceId === draftWorkspaceId ? ' current' : ''}`, onContextMenu: openContextMenu, onPointerLeave: stopInfoTimer },
+          {
+            className: `dsh-space-head${item.workspaceId === draftWorkspaceId ? ' current' : ''}`,
+            onContextMenu: openContextMenu,
+            onPointerLeave: stopInfoTimer,
+            onPointerEnter: (event: PointerEvent) => {
+              if (event.pointerType === 'mouse')
+                showInfo({ kind: 'workspace', id: item.workspaceId }, false, true)
+            },
+          },
           e(
             'button',
             {
@@ -911,10 +922,6 @@ export function createSidebar(
               'disabled': busy,
               'aria-expanded': open,
               'aria-current': item.workspaceId === draftWorkspaceId ? 'location' : undefined,
-              'onPointerEnter': (event: PointerEvent) => {
-                if (event.pointerType === 'mouse')
-                  showInfo({ kind: 'workspace', id: item.workspaceId }, false, true)
-              },
               'draggable': !busy && (layout.workspaceSort === 'manual' || isPinned({ kind: 'workspace', id: item.workspaceId })),
               'onDragStart': (event: DragEvent) => {
                 if (isPinned({ kind: 'workspace', id: item.workspaceId }))
@@ -1490,8 +1497,9 @@ export function createSidebar(
       if ((target.kind === 'workspace' && !item) || (target.kind === 'session' && (!session || workspaceState.archivedSessionIds.includes(target.id))))
         return null
       const title = session?.displayTitle ?? item!.title
-      const dismiss = (): void => {
-        stopInfoTimer()
+      const dismiss = (reason?: 'leave'): void => {
+        if (reason !== 'leave')
+          stopInfoTimer()
         setInfo(current => current === info ? null : current)
       }
       const row = session && (item ? buckets.rows.get(item.workspaceId) : buckets.misc)?.find(row => row.id === session.id)

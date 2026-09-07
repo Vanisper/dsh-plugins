@@ -14,7 +14,7 @@ interface DetailsProps {
   children?: unknown
   action?: unknown
   onRename: (title: string) => Promise<void>
-  onClose: () => void
+  onClose: (reason?: 'leave') => void
   onDetachedError: (error: unknown) => void
   onEnter: () => void
 }
@@ -35,9 +35,22 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
     const busyRef = React.useRef(false)
     const mounted = React.useRef(false)
     const pointerMode = React.useRef(!props.focus)
+    const closeTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
     const ime = React.useMemo(createImeGuard, [])
     const latest = React.useRef(props)
     latest.current = props
+    const keepOpen = (): void => {
+      clearTimeout(closeTimer.current)
+      closeTimer.current = undefined
+    }
+    const leave = (): void => {
+      if (closeTimer.current === undefined) {
+        closeTimer.current = setTimeout(() => {
+          closeTimer.current = undefined
+          latest.current.onClose('leave')
+        }, 220)
+      }
+    }
     React.useEffect(() => {
       mounted.current = true
       const element = panel.current!
@@ -60,22 +73,17 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
         if (!element.contains(event.target as Node) && !anchor.contains(event.target as Node))
           latest.current.onClose()
       }
-      const move = (event: PointerEvent): void => {
+      const enter = (event: PointerEvent): void => {
         if (!pointerMode.current || event.pointerType !== 'mouse')
           return
-        const source = row.getBoundingClientRect()
-        const box = element.getBoundingClientRect()
-        const inside = (rect: { left: number, right: number, top: number, bottom: number }): boolean =>
-          event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom
-        // 只保留行与面板之间的横向通道，不以关闭延时掩盖指针离开
-        const corridor = {
-          left: Math.min(source.right, box.right),
-          right: Math.max(source.left, box.left),
-          top: Math.min(source.top, box.top),
-          bottom: Math.max(source.bottom, box.bottom),
-        }
-        if (!inside(source) && !inside(box) && !inside(corridor))
-          latest.current.onClose()
+        if (row.contains(event.target as Node) || element.contains(event.target as Node))
+          keepOpen()
+        else
+          leave()
+      }
+      const exit = (event: PointerEvent): void => {
+        if (pointerMode.current && event.pointerType === 'mouse' && !event.relatedTarget)
+          leave()
       }
       const escape = (event: KeyboardEvent): void => {
         if (event.key !== 'Escape' || ime.active(event))
@@ -88,15 +96,18 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
       window.addEventListener('resize', position)
       window.addEventListener('scroll', position, true)
       document.addEventListener('pointerdown', outside)
-      document.addEventListener('pointermove', move)
+      document.addEventListener('pointerover', enter)
+      document.addEventListener('pointerout', exit)
       document.addEventListener('keydown', escape, true)
       return () => {
         mounted.current = false
+        keepOpen()
         observer?.disconnect()
         window.removeEventListener('resize', position)
         window.removeEventListener('scroll', position, true)
         document.removeEventListener('pointerdown', outside)
-        document.removeEventListener('pointermove', move)
+        document.removeEventListener('pointerover', enter)
+        document.removeEventListener('pointerout', exit)
         document.removeEventListener('keydown', escape, true)
       }
     }, [])
@@ -138,11 +149,12 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
         'onPointerEnter': (event: { pointerType: string }) => {
           if (event.pointerType === 'mouse')
             pointerMode.current = true
+          keepOpen()
           props.onEnter()
         },
         'onPointerLeave': (event: { pointerType: string }) => {
           if (event.pointerType === 'mouse')
-            onClose()
+            leave()
         },
         'onBlur': (event: { relatedTarget: Node | null }) => {
           if (event.relatedTarget && !panel.current?.contains(event.relatedTarget))

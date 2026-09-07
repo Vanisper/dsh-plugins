@@ -16,7 +16,7 @@ function harness() {
     groups: [{ id: 'p', name: 'Provider', models: [{ id: 'm', name: 'Model', reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'low', name: 'Low' }] } }] }],
     failures: [],
     permissions: { currentValue: 'read-only', options: [{ value: 'read-only', name: 'Read Only' }, { value: 'workspace-write', name: 'Workspace Write' }, { value: 'danger-full-access', name: 'danger-full-access' }] },
-    commands: ['goal', 'plan', 'permission', 'clear'].map(name => ({ name, description: `${name} description` })),
+    commands: ['goal', 'plan', 'permission', 'clear'].map(name => ({ name, description: `${name} description`, ...(['goal', 'plan'].includes(name) ? { input: { hint: 'body' } } : {}) })),
   }
   const fetch = vi.fn(async () => ({ ok: true, json: async () => data }))
   vi.stubGlobal('fetch', fetch)
@@ -80,13 +80,13 @@ describe('无实体原生命令适配', () => {
     h.input.setDraft('keep text')
     h.input.addImages(['image'])
     await h.pick('plan')
-    expect(h.options.plan).toBe(true)
+    expect(h.options.intent).toBe('plan')
     expect(h.commands.menu.getSnapshot().open).toBe(false)
     expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     expect(h.focus).toHaveBeenCalled()
     expect(h.input.snapshot).toMatchObject({ draft: 'keep text', imageIds: ['image'] })
     await h.pick('plan')
-    expect(h.options.plan).toBe(true)
+    expect(h.options.intent).toBe('plan')
     expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     expect(h.input.snapshot).toMatchObject({ draft: 'keep text', imageIds: ['image'] })
     expect(h.sink).not.toHaveBeenCalled()
@@ -126,21 +126,108 @@ describe('无实体原生命令适配', () => {
     await h.popupReady()
     h.commands.popup.setSearch('Low')
     await h.commands.popup.select(0)
-    expect(h.options.explicit()).toEqual({ permission: 'workspace-write', plan: false, selection: { provider: 'p', model: 'm', reasoningEffort: 'low' } })
+    expect(h.options.explicit()).toEqual({ permission: 'workspace-write', intent: 'message', selection: { provider: 'p', model: 'm', reasoningEffort: 'low' } })
     expect(h.sink).not.toHaveBeenCalled()
   })
 
-  it('填写 goal 不创建实体，首次发送才交给真实输入执行一次', async () => {
+  it('目标标记不向正文插入命令，首次发送只交付一次正文与附件', async () => {
     const h = harness()
     h.input.setDraft('finish work')
     h.input.addImages(['image'])
     await h.pick('goal')
-    expect(h.input.snapshot.draft).toBe('/goal finish work')
+    expect(h.input.snapshot.draft).toBe('finish work')
+    expect(h.options.intent).toBe('goal')
+    expect(h.commands.menu.getSnapshot().open).toBe(false)
+    expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     expect(h.sink).not.toHaveBeenCalled()
     h.input.submit()
     h.input.submit()
     await vi.waitFor(() => expect(h.sink).toHaveBeenCalledTimes(1))
-    expect(h.sink.mock.calls[0]?.slice(0, 2)).toEqual(['/goal finish work', ['image']])
+    expect(h.sink.mock.calls[0]?.slice(0, 2)).toEqual(['finish work', ['image']])
+  })
+
+  it('计划和目标互相替换，重复选择与取消都保留正文和附件', async () => {
+    const h = harness()
+    h.input.setDraft('keep text')
+    h.input.addImages(['image'])
+    for (const intent of ['goal', 'plan', 'goal', 'goal'] as const) {
+      await h.pick(intent)
+      expect(h.options.intent).toBe(intent)
+      expect(h.commands.popup.state.getSnapshot().open).toBe(false)
+      expect(h.input.snapshot).toMatchObject({ draft: 'keep text', imageIds: ['image'] })
+    }
+    h.options.setIntent('message')
+    expect(h.input.snapshot).toMatchObject({ draft: 'keep text', imageIds: ['image'] })
+    expect(h.sink).not.toHaveBeenCalled()
+  })
+
+  it('裸 /goal 只选择意图，含正文的前导 /goal 规范为目标和正文', async () => {
+    const h = harness()
+    h.options.setIntent('plan')
+    h.input.setDraft('/goal')
+    h.input.addImages(['image'])
+    h.input.submit()
+    await vi.waitFor(() => expect(h.options.intent).toBe('goal'))
+    expect(h.input.snapshot).toMatchObject({ draft: '', imageIds: ['image'] })
+    expect(h.sink).not.toHaveBeenCalled()
+    h.options.setIntent('plan')
+    h.input.setDraft('/goal finish work')
+    h.input.submit()
+    await vi.waitFor(() => expect(h.sink).toHaveBeenCalledTimes(1))
+    expect(h.options.intent).toBe('goal')
+    expect(h.sink.mock.calls[0]?.slice(0, 2)).toEqual(['finish work', ['image']])
+  })
+
+  it('目标意图中的斜杠正文不再触发或执行嵌套命令', async () => {
+    const h = harness()
+    await h.pick('goal')
+    h.input.setDraft('/plan review\n/feedback details')
+    h.commands.track(h.input.snapshot.draft, h.input.snapshot.draft.length, { tier: 'plain' }, h.input.snapshot.draftRev)
+    expect(h.commands.menu.getSnapshot().open).toBe(false)
+    h.input.submit()
+    await vi.waitFor(() => expect(h.sink).toHaveBeenCalledTimes(1))
+    expect(h.options.intent).toBe('goal')
+    expect(h.sink.mock.calls[0]?.[0]).toBe('/plan review\n/feedback details')
+  })
+
+  it.each(['', 'clear', 'PAUSE', 'resume', 'edit', 'edit objective'])('目标意图拒绝空目标或管理参数 %s，保留全部内容', async (text) => {
+    const h = harness()
+    await h.pick('goal')
+    h.input.setDraft(text)
+    h.input.addImages(['image'])
+    h.input.submit()
+    await vi.waitFor(() => expect(h.input.notices.getSnapshot()).not.toBeNull())
+    expect(h.sink).not.toHaveBeenCalled()
+    expect(h.input.snapshot).toMatchObject({ draft: text, imageIds: ['image'] })
+    expect(h.options.intent).toBe('goal')
+  })
+
+  it('行内斜杠沿用原生规则，排除接收正文的命令，加号仍展示完整目录', async () => {
+    const h = harness()
+    h.input.setDraft('/plan review\n/')
+    h.commands.track(h.input.snapshot.draft, h.input.snapshot.draft.length, { tier: 'plain' }, h.input.snapshot.draftRev)
+    await vi.waitFor(() => expect(h.commands.menu.getSnapshot().groups[0]?.status).toBe('ready'))
+    expect(h.commands.menu.getSnapshot().groups[0]!.items.map(item => item.name)).toEqual(['permission', 'clear', 'model'])
+    h.commands.close()
+    await h.pick('goal')
+    expect(h.options.intent).toBe('goal')
+    expect(h.input.snapshot.draft).toBe('/plan review\n/')
+    expect(h.sink).not.toHaveBeenCalled()
+  })
+
+  it('只移动光标也会更新命令位置和待消费 token，目标键盘选择不留下前缀', async () => {
+    const h = harness()
+    h.input.setDraft('/\n/')
+    h.commands.track('/\n/', 3, { tier: 'plain' }, h.input.snapshot.draftRev)
+    await vi.waitFor(() => expect(h.commands.menu.getSnapshot().groups[0]?.status).toBe('ready'))
+    expect(h.commands.menu.getSnapshot().groups[0]!.items.map(item => item.name)).not.toContain('goal')
+    h.commands.track('/\n/', 1, { tier: 'plain' }, h.input.snapshot.draftRev)
+    expect(h.commands.menu.getSnapshot().groups[0]!.items.map(item => item.name)).toContain('goal')
+    const index = h.commands.menu.getSnapshot().groups[0]!.items.findIndex(item => item.name === 'goal')
+    h.commands.pick('command', index)
+    expect(h.input.snapshot.draft.trim()).toBe('/')
+    expect(h.options.intent).toBe('goal')
+    expect(h.sink).not.toHaveBeenCalled()
   })
 
   it.each([false, true])('完整权限沿用原生风险确认，不能通过手写命令绕过（手写：%s）', async (typed) => {
@@ -165,7 +252,7 @@ describe('无实体原生命令适配', () => {
     expect(h.sink).not.toHaveBeenCalled()
   })
 
-  it.each(['/goal', '/goal clear', '/goal pause', '/goal resume', '/goal edit', '/goal edit changed'])('拒绝无目标或已有目标控制命令 %s，不创建实体', async (line) => {
+  it.each(['/goal clear', '/goal pause', '/goal resume', '/goal edit', '/goal edit changed'])('拒绝已有目标控制命令 %s，不创建实体', async (line) => {
     const h = harness()
     h.input.setDraft(line)
     h.input.submit()
@@ -188,17 +275,18 @@ describe('无实体原生命令适配', () => {
     expect(h.sink).not.toHaveBeenCalled()
   })
 
-  it('保留原生 plan 参数语义：off 只改配置，其他参数作为待发送内容', async () => {
+  it('plan 的 off 只改配置，带正文的命令保留原生解析，不将正文解释成嵌套指令', async () => {
     const h = harness()
-    h.options.setPlan(true)
+    h.options.setIntent('plan')
     h.input.setDraft('/plan off')
     h.input.submit()
     await vi.waitFor(() => expect(h.input.snapshot.draft).toBe(''))
-    expect(h.options.plan).toBe(false)
-    h.input.setDraft('/plan review changes')
+    expect(h.options.intent).toBe('message')
+    h.input.setDraft('/plan /goal review changes')
     h.input.submit()
     await vi.waitFor(() => expect(h.sink).toHaveBeenCalledTimes(1))
-    expect(h.sink.mock.calls[0]?.[0]).toBe('/plan review changes')
+    expect(h.sink.mock.calls[0]?.[0]).toBe('/plan /goal review changes')
+    expect(h.options.intent).toBe('message')
   })
 
   it('提交裸 /plan 直接启用配置，只消费命令文本，不发送附件或弹出选项', async () => {
@@ -206,7 +294,7 @@ describe('无实体原生命令适配', () => {
     h.input.setDraft('  /plan  ')
     h.input.addImages(['image'])
     h.input.submit()
-    await vi.waitFor(() => expect(h.options.plan).toBe(true))
+    await vi.waitFor(() => expect(h.options.intent).toBe('plan'))
     expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     expect(h.input.snapshot).toMatchObject({ draft: '', imageIds: ['image'] })
     expect(h.sink).not.toHaveBeenCalled()
@@ -223,7 +311,7 @@ describe('无实体原生命令适配', () => {
     h.commands.arbitrate('enter', false)
     expect(h.commands.popup.state.getSnapshot().open).toBe(false)
     expect(h.input.snapshot.draft).toBe('')
-    expect(h.options.plan).toBe(true)
+    expect(h.options.intent).toBe('plan')
     expect(h.sink).not.toHaveBeenCalled()
   })
 
@@ -256,7 +344,7 @@ describe('无实体原生命令适配', () => {
     await h.options.load()
     h.commands.close()
     await h.pick('plan')
-    expect(h.options.plan).toBe(true)
+    expect(h.options.intent).toBe('plan')
     expect(h.commands.popup.state.getSnapshot().open).toBe(false)
   })
 
@@ -289,15 +377,15 @@ describe('无实体原生命令适配', () => {
     log.mockRestore()
   })
 
-  it('草稿变化后拒绝旧菜单中的 Plan，不消费新正文或改变配置', async () => {
+  it.each(['plan', 'goal'])('草稿变化后拒绝旧菜单中的 %s，不消费新正文或改变配置', async (name) => {
     const h = harness()
     h.input.setDraft('/pl')
     h.commands.toggle()
     await vi.waitFor(() => expect(h.commands.menu.getSnapshot().groups[0]?.status).toBe('ready'))
-    const index = h.commands.menu.getSnapshot().groups[0]!.items.findIndex(item => item.name === 'plan')
+    const index = h.commands.menu.getSnapshot().groups[0]!.items.findIndex(item => item.name === name)
     h.input.setDraft('new draft')
     h.commands.pick('command', index)
-    expect(h.options.plan).toBe(false)
+    expect(h.options.intent).toBe('message')
     expect(h.input.snapshot.draft).toBe('new draft')
     expect(h.sink).not.toHaveBeenCalled()
   })
@@ -320,6 +408,27 @@ describe('无实体原生命令适配', () => {
     await Promise.resolve()
     expect(h.sink).not.toHaveBeenCalled()
     expect(h.input.snapshot.draft).toBe('/goal delayed')
+  })
+
+  it('等待命令目录时取消目标意图，迟到结果不改变新意图或发送', async () => {
+    const h = harness()
+    await h.pick('goal')
+    let resolve!: () => void
+    const load = h.fetch.getMockImplementation()!
+    h.fetch.mockImplementationOnce(async () => {
+      await new Promise<void>((done) => {
+        resolve = done
+      })
+      return load()
+    })
+    h.input.setDraft('delayed objective')
+    h.input.submit()
+    h.options.setIntent('message')
+    resolve()
+    await h.options.load()
+    expect(h.sink).not.toHaveBeenCalled()
+    expect(h.input.snapshot.draft).toBe('delayed objective')
+    expect(h.input.notices.getSnapshot()).toBeNull()
   })
 })
 

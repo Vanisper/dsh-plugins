@@ -6,6 +6,8 @@ import type { ConversationService, ReactLike, SessionService, SlotsService, Work
 import { runOperation } from './api.ts'
 import { createControls } from './controls.ts'
 import { createDraftCommands } from './draft-commands.ts'
+import { createDraftIntentChip } from './draft-intent-chip.ts'
+import { draftSubmissionText } from './draft-intent.ts'
 import { createDraftOptions } from './draft-options.ts'
 import { createDraftSession } from './draft-session.ts'
 import { createNativeCommandUI, createNativeComposer, extendNativeEntry, extendNewSession, pauseInitialSelection, readNativeClientCommands, selectSnapshot, useNativeSnapshot } from './native-compat.ts'
@@ -43,6 +45,7 @@ export function createDraftComposer(
   const { Shell, Root } = createNativeComposer(require)
   const options = createDraftOptions()
   const { IconButton } = createControls(React)
+  const IntentChip = createDraftIntentChip(React)
   const nativeCommands = createNativeCommandUI(require, key => (ctx as { get: (name: string) => any }).get('locale').bind('permission.access')(key))
   let commands: ReturnType<typeof createDraftCommands>
   let composerElement: HTMLElement | null = null
@@ -98,7 +101,7 @@ export function createDraftComposer(
         if (config.selection)
           await context.get('modelDirectories').directoryFor(sessionId).select(config.selection)
         const session = sessions.binding(sessionId)?.session as unknown as { command: (line: string) => Promise<{ ok: boolean, value?: { matched: boolean }, error?: { message: string } }> }
-        for (const line of [config.permission ? `/permission ${config.permission}` : undefined, config.plan ? '/plan' : undefined]) {
+        for (const line of [config.permission ? `/permission ${config.permission}` : undefined, config.intent === 'plan' ? '/plan' : undefined]) {
           if (!line)
             continue
           const result = await session.command(line)
@@ -127,7 +130,7 @@ export function createDraftComposer(
     inputTriggers: () => commands,
     popup: () => commands?.popup,
     async defaultSink(text: string, imageIds: readonly string[], _mode: unknown, signal: AbortSignal) {
-      await draft.submit({ text, imageIds }, signal)
+      await draft.submit({ text: draftSubmissionText(text, options.intent), imageIds }, signal)
       return { kind: 'success' }
     },
     commandImages: {
@@ -246,7 +249,6 @@ export function createDraftComposer(
             }
             const registry = slots as SlotsService & { entries: (key: string) => NativeEntry[] }
             const model = registry.entries('conversation.input.model').find(entry => (entry.options.priority ?? 0) === 0)
-            const plan = registry.entries('conversation.input.plan').find(entry => (entry.options.priority ?? 0) === 0)
             const locale = (ctx as { get: (name: string) => any }).get('locale')
             return e('div', { style: { display: 'contents' }, ref: (element: HTMLElement | null) => {
               composerElement = element
@@ -275,7 +277,7 @@ export function createDraftComposer(
                     command: options.command,
                     useProjection: (key: string, selector?: (value: unknown) => unknown) => {
                       const original = props.useProjection(key, selector)
-                      const value = key === 'permissions' ? settings.permissions : key === 'plan' ? { active: options.plan, pending: false } : undefined
+                      const value = key === 'permissions' ? settings.permissions : key === 'plan' ? { active: options.intent === 'plan', pending: false } : undefined
                       return value === undefined ? original : selector ? selector(value) : value
                     },
                     renderSlot: (key: string, owner: Record<string, unknown>) => {
@@ -283,18 +285,14 @@ export function createDraftComposer(
                         return e(model.component, { ...owner, locked: busy, available: true, directory: options, load: options.load, select: options.select, t: locale.bind('model') })
                       }
                       if (key === 'conversation.input.plan') {
-                        return plan
-                          ? e(plan.component, {
-                              ...owner,
-                              locked: busy,
-                              useProjection: () => ({ active: options.plan, pending: false }),
-                              exitPlanMode: async () => {
-                                options.setPlan(false)
-                                return null
-                              },
-                              t: locale.bind('plan'),
-                            })
-                          : null
+                        return e(IntentChip, {
+                          intent: options.intent,
+                          locked: busy,
+                          onCancel: () => {
+                            options.setIntent('message')
+                            composerElement?.querySelector('textarea')?.focus()
+                          },
+                        })
                       }
                       return props.renderSlot(key, owner)
                     },

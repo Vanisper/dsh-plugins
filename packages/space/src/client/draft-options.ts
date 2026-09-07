@@ -1,4 +1,5 @@
 import type { DraftModelSelection, DraftOptions } from '../shared/draft-options.ts'
+import type { DraftIntent } from './draft-intent.ts'
 import type { ObservableSnapshot } from './types.ts'
 
 interface DraftOptionState extends DraftOptions {
@@ -11,9 +12,9 @@ export interface DraftOptionStore extends ObservableSnapshot<DraftOptionState> {
   load: () => Promise<void>
   select: (next: DraftModelSelection) => Promise<boolean>
   command: (line: string) => Promise<boolean>
-  readonly plan: boolean
-  setPlan: (value: boolean) => void
-  explicit: () => { selection?: DraftModelSelection, permission?: string, plan: boolean }
+  readonly intent: DraftIntent
+  setIntent: (value: DraftIntent) => void
+  explicit: () => { selection?: DraftModelSelection, permission?: string, intent: DraftIntent }
   reset: () => void
   dispose: () => void
 }
@@ -30,7 +31,7 @@ export function createDraftOptions(): DraftOptionStore {
   }
   let selection: DraftModelSelection | undefined
   let permission: string | undefined
-  let plan = false
+  let intent: DraftIntent = 'message'
   let disposed = false
   let inFlight: Promise<void> | undefined
   let baseline: DraftOptions | undefined
@@ -100,16 +101,16 @@ export function createDraftOptions(): DraftOptionStore {
       publish({ ...state, permissions: { ...state.permissions, currentValue: value } })
       return true
     },
-    get plan() { return plan },
-    setPlan(value: boolean): void {
-      plan = value
+    get intent() { return intent },
+    setIntent(value: DraftIntent): void {
+      intent = value
       publish({ ...state })
     },
-    explicit: () => ({ selection, permission, plan }),
+    explicit: () => ({ selection, permission, intent }),
     reset(): void {
       selection = undefined
       permission = undefined
-      plan = false
+      intent = 'message'
       publish({ ...state, current: baseline?.current ?? null, permissions: baseline?.permissions })
       void this.load()
     },

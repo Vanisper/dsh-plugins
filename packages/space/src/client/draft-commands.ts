@@ -4,6 +4,7 @@ import type { DraftCommand, DraftModelSelection } from '../shared/draft-options.
 import type { DraftOptionStore } from './draft-options.ts'
 import type { NativeCommandUI, NativeInput } from './native-compat.ts'
 import type { ObservableSnapshot } from './types.ts'
+import { draftSubmissionText } from './draft-intent.ts'
 
 export interface DraftCommands {
   menu: ObservableSnapshot<MenuState>
@@ -22,6 +23,7 @@ export interface DraftCommands {
 }
 
 interface Candidate extends InputTriggerCandidate {
+  input?: DraftCommand['input']
   disabledReason?: string
 }
 
@@ -101,7 +103,7 @@ export function createDraftCommands(
       return
     let items: Candidate[]
     try {
-      items = native.filter(catalog(), hit.query)
+      items = native.filter(catalog().filter(item => hit!.position === 'leading' || item.input === undefined), hit.query)
     }
     catch (cause) {
       items = [{ name: '重试命令目录', description: cause instanceof Error ? cause.message : String(cause) }]
@@ -187,16 +189,10 @@ export function createDraftCommands(
     try {
       available(item.name)
       const span = hit.span
-      if (item.name === 'goal') {
-        dismiss()
-        if (!/^\s*\/goal(?:\s|$)/u.test(input.snapshot.draft))
-          input.insertText('/goal ', span)
-        focus()
-      }
-      else if (item.name === 'plan') {
+      if (item.name === 'goal' || item.name === 'plan') {
         dismiss()
         if (input.consumeToken({ kind: 'span', span }))
-          options.setPlan(true)
+          options.setIntent(item.name)
         focus()
       }
       else {
@@ -212,9 +208,10 @@ export function createDraftCommands(
     if (!editable() || submitting)
       return
     const snapshot = input.snapshot
+    const intent = options.intent
     const line = snapshot.draft.trim()
     const command = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u.exec(line)
-    if (!command) {
+    if (!command && intent !== 'goal') {
       close()
       originalSubmit(mode)
       return
@@ -225,23 +222,33 @@ export function createDraftCommands(
     void (async () => {
       try {
         await options.load()
-        if (!editable() || turn !== lifecycle || snapshot.draftRev !== input.snapshot.draftRev)
+        if (!editable() || turn !== lifecycle || intent !== options.intent || snapshot.draftRev !== input.snapshot.draftRev)
           return
-        const name = command[1]!
-        const args = line.slice(command[0].length).trim()
+        // 已选目标时，整段正文归目标所有；其中的斜杠不是第二条命令
+        if (intent === 'goal') {
+          available('goal')
+          draftSubmissionText(snapshot.draft, 'goal')
+          originalSubmit(mode)
+          return
+        }
+        const name = command![1]!
+        const args = line.slice(command![0].length).trim()
         available(name)
         if (name === 'goal') {
-          if (!args)
-            throw new Error('请在 /goal 后填写目标；发送时才会创建会话并启动目标')
-          if (/^(?:clear|pause|resume)$|^edit(?:\s|$)/iu.test(args))
-            throw new Error('草稿中尚无目标可修改，请直接填写新目标')
-          originalSubmit(mode)
+          if (args)
+            draftSubmissionText(args, 'goal')
+          input.setDraft(args)
+          options.setIntent('goal')
+          if (args)
+            originalSubmit(mode)
+          else
+            focus()
           return
         }
         if (name === 'plan') {
           if (!args || args === 'off') {
             if (input.consumeToken({ kind: 'span', span: { start: 0, end: snapshot.draft.length, draftRev: snapshot.draftRev } }))
-              options.setPlan(args !== 'off')
+              options.setIntent(args === 'off' ? 'message' : 'plan')
             focus()
           }
           else {
@@ -297,12 +304,12 @@ export function createDraftCommands(
     },
     track(text: string, caret: number, guard: TriggerGuard, draftRev: number) {
       const detected = native.detect(text, caret, guard)
-      if (!editable() || detected?.trigger !== '/' || detected.position !== 'leading') {
+      if (!editable() || options.intent === 'goal' || detected?.trigger !== '/') {
         dismiss()
         return
       }
       const next = { ...detected, span: { ...detected.span, draftRev } }
-      if (hit?.query === next.query && hit.span.draftRev === draftRev && menu.getSnapshot().open && !launcher.getSnapshot())
+      if (hit?.query === next.query && hit.span.draftRev === draftRev && hit.span.start === next.span.start && hit.span.end === next.span.end && menu.getSnapshot().open && !launcher.getSnapshot())
         return
       open(next, false)
     },

@@ -1,9 +1,11 @@
 import type { DraftHostConversation, DraftHostSessions } from './draft-host.ts'
 import type { ReactLike, SessionSnapshot, SlotsService, WorkspaceService } from './types.ts'
 import * as React from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDraftComposer } from './draft-host.ts'
 import { createNativeComposer } from './native-compat.ts'
+
+afterEach(() => vi.unstubAllGlobals())
 
 function store<T>(state: T) {
   return {
@@ -19,10 +21,11 @@ function harness() {
   const snapshot: SessionSnapshot = { ids: [], byId: {}, phase: 'ready' }
   const require = (name: string): unknown => name === '@deepseek-ai/dsh-client-runtime/client' ? { createSnapshotStore: store } : {}
   const { Shell } = createNativeComposer(require)
-  const send = vi.fn(async () => {
+  const send = vi.fn(async (_text: string, _images: readonly string[]) => {
     throw new Error('credentials missing')
   })
   const target = new Shell({ actx: {}, defaultSink: send, commandImages: {} })
+  const command = vi.fn(async (_line: string) => ({ ok: true, value: { matched: true } }))
   const sessions = {
     list: store(snapshot),
     clear: vi.fn(() => { snapshot.current = undefined }),
@@ -33,17 +36,47 @@ function harness() {
       return sessionId
     }),
     scope: () => ({}),
-    binding: () => ({ session: { getSnapshot: () => ({ openState: 'open' }) } }),
+    binding: () => ({ session: { getSnapshot: () => ({ openState: 'open' }), command } }),
     open: vi.fn((id: string) => { snapshot.current = id }),
   }
   const block = store<{ reason: string } | undefined>(undefined)
   const workspaces = { refresh: vi.fn(async () => {}), list: store({ items: [{ workspaceId: 'project', sessionIds: snapshot.ids }] }) }
   const conversation = { input: { for: () => target }, blocks: { storeFor: () => block } }
-  const composer = createDraftComposer(React as unknown as ReactLike, require, {}, {} as SlotsService, sessions as unknown as DraftHostSessions, workspaces as unknown as WorkspaceService, conversation as unknown as DraftHostConversation)
-  return { composer, sessions, target, send, block }
+  const ctx = { get: () => ({ live: { contributions: new Map() } }) }
+  const composer = createDraftComposer(React as unknown as ReactLike, require, ctx, {} as SlotsService, sessions as unknown as DraftHostSessions, workspaces as unknown as WorkspaceService, conversation as unknown as DraftHostConversation)
+  return { composer, sessions, target, send, block, command }
 }
 
 describe('原生草稿接入宿主', () => {
+  it('目标意图在交付时才编码，创建失败保留纯正文，重试不叠加命令或开启 Plan', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ current: null, groups: [], failures: [], commands: [{ name: 'goal', description: 'Goal' }] }) })))
+    const h = harness()
+    h.composer.draft.begin('project')
+    h.composer.input.setDraft('/goal')
+    h.composer.input.submit()
+    await vi.waitFor(() => expect(h.composer.input.snapshot.draft).toBe(''))
+    expect(h.sessions.create).not.toHaveBeenCalled()
+    h.composer.input.setDraft('/feedback objective\n/plan literal')
+    h.composer.input.addImages(['image'])
+    const create = h.sessions.create.getMockImplementation()!
+    h.sessions.create.mockImplementationOnce(async (input) => {
+      await create(input)
+      throw new Error('response lost')
+    })
+    h.composer.input.submit()
+    await vi.waitFor(() => expect(h.composer.draft.getSnapshot().error).toBe('response lost'))
+    await vi.waitFor(() => expect(h.composer.input.snapshot.phase).toBe('plain'))
+    expect(h.composer.input.snapshot).toMatchObject({ draft: '/feedback objective\n/plan literal', imageIds: ['image'] })
+    h.composer.input.submit()
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1))
+    expect(h.send.mock.calls[0]?.slice(0, 2)).toEqual(['/goal /feedback objective\n/plan literal', ['image']])
+    expect(h.sessions.create).toHaveBeenCalledTimes(1)
+    expect(h.command).not.toHaveBeenCalled()
+    expect(h.target.snapshot).toMatchObject({ draft: '/goal /feedback objective\n/plan literal', imageIds: ['image'] })
+    h.composer.input.dispose()
+    h.target.dispose()
+  })
+
   it('新建时不创建；首次提交通过宿主创建真实身份并交付全部输入', async () => {
     const h = harness()
     h.composer.draft.begin('project')

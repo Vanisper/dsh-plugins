@@ -936,15 +936,7 @@ export function createSidebar(
               },
               'onClick': () => toggle(item.workspaceId),
             },
-            e(Icon, { name: open ? 'chevronDown' : 'chevronRight', size: 12 }),
-            e(Icon, {
-              name:
-                item.kind === 'space'
-                  ? 'layers'
-                  : item.kind === 'chat'
-                    ? 'chat'
-                    : 'folder',
-            }),
+            e('span', { className: 'dsh-space-workspace-icon' }, e(Icon, { name: open ? 'open' : 'folder' })),
             e(
               'span',
               { className: 'dsh-space-heading-text' },
@@ -1543,7 +1535,7 @@ export function createSidebar(
                 ? e('div', { className: 'dsh-space-detail-status' }, e(StateDot, { state: 'ongoing' }), `${row.runningSubagentCount} 个子代理运行中`)
                 : null,
             )
-          : e('div', { className: 'dsh-space-detail-status' }, e(Icon, { name: 'message' }), `${buckets.rows.get(item!.workspaceId)?.length ?? 0} 个会话`),
+          : e('div', { className: 'dsh-space-detail-status' }, e(Icon, { name: 'message' }), `${buckets.rows.get(item!.workspaceId)?.length ?? 0} 个会话${item!.kind === 'space' ? ' · 空间' : ''}`),
         !session && item
           ? e(
               'button',

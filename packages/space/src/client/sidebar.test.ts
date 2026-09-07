@@ -235,6 +235,7 @@ it('成员只在浮层展示，主成员排首位且不重复名称路径或主�
   expect(document.querySelector('.dsh-space-member-summary')).toBeNull()
   await click('查看信息')
   const panel = document.querySelector('.dsh-space-details')!
+  expect(panel.querySelector('.dsh-space-detail-status')?.textContent).toBe('1 个会话 · 空间')
   expect(panel.textContent).toContain('成员目录')
   expect(panel.textContent).not.toContain('主要')
   expect(panel.querySelector('[aria-label="新建会话"]')).toBeNull()
@@ -266,6 +267,25 @@ it('会话悬浮预览只展示摘要，移入后仍可原位改名', async () =
 })
 
 describe('侧栏交互', () => {
+  it('项目行只保留开合文件夹图标，折叠切换不改变类型或会话', async () => {
+    const { workspaces, sessions } = await mount()
+    const heading = document.querySelector<HTMLButtonElement>('.dsh-space-heading')!
+    const icon = heading.querySelector('.dsh-space-workspace-icon')!
+    const open = icon.innerHTML
+    expect(heading.querySelectorAll('svg')).toHaveLength(1)
+    expect(heading.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => heading.click())
+    expect(heading.getAttribute('aria-expanded')).toBe('false')
+    expect(icon.innerHTML).not.toBe(open)
+    expect(document.querySelector('.dsh-space-session')).toBeNull()
+    await act(async () => heading.click())
+    expect(icon.innerHTML).toBe(open)
+    expect(document.querySelector('.dsh-space-session-title')?.textContent).toBe('已有会话')
+    expect(operation).not.toHaveBeenCalled()
+    expect(workspaces.startSession).not.toHaveBeenCalled()
+    expect(sessions.open).not.toHaveBeenCalled()
+  })
+
   it.each(['composition', 'isComposing', '229'] as const)('输入法确认不隐式提交改名，独立 Enter 才保存：%s', async (kind) => {
     const { workspaces } = await mount()
     await click('查看信息')

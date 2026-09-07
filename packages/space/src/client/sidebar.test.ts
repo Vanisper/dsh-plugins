@@ -138,6 +138,7 @@ async function mount(wide = true) {
     workspaces,
     mode,
     draft,
+    { StateDot: ({ state }) => createElement('span', { 'data-native-state': state, 'aria-hidden': true }) },
   )
   const host = document.createElement('div')
   document.body.append(host)
@@ -188,6 +189,69 @@ async function registry(value: RegistryPayload | undefined): Promise<void> {
   fixture.registry = value
   await act(async () => fixture.receive?.(value, value ? undefined : 'offline'))
 }
+
+it('空闲会话保留左侧占位但不显示状态图形', async () => {
+  await mount()
+  const slot = document.querySelector('.dsh-space-session-main .dsh-space-status')!
+  expect(slot).not.toBeNull()
+  expect(slot.querySelector('[data-native-state]')).toBeNull()
+  expect(slot.getAttribute('role')).toBeNull()
+})
+
+it.each([
+  [{ running: true }, 'ongoing', '运行中'],
+  [{ completed: true }, 'done', '完成未读'],
+  [{ running: true, completed: true, pendingInteraction: 'approval' }, 'warning', '等待审批'],
+  [{ pendingInteraction: 'plan-review' }, 'warning', '等待计划审阅'],
+  [{ pendingInteraction: 'question' }, 'warning', '等待回答'],
+] as const)('会话状态映射到原生标识 %j', async (state, nativeState, label) => {
+  const { sessionSnapshot } = await mount()
+  Object.assign(sessionSnapshot.byId.s, state)
+  await registry({ ...fixture.registry! })
+  const slot = document.querySelector('.dsh-space-session-main .dsh-space-status')!
+  expect(slot.getAttribute('aria-label')).toBe(label)
+  expect(slot.querySelector('[data-native-state]')?.getAttribute('data-native-state')).toBe(nativeState)
+})
+
+it('仅子代理运行时仍显示进行中，不误判为空闲', async () => {
+  const { sessionSnapshot } = await mount()
+  sessionSnapshot.ids.push('child')
+  Object.assign(sessionSnapshot.byId, { child: { id: 'child', parentId: 's', origin: 'subagent', running: true, blank: false } })
+  await registry({ ...fixture.registry! })
+  expect(document.querySelector('.dsh-space-status')?.getAttribute('aria-label')).toBe('1 个子代理运行中')
+  expect(document.querySelector('[data-native-state]')?.getAttribute('data-native-state')).toBe('ongoing')
+})
+
+it('侧栏不显示成员摘要，成员路径和主要标记集中在工作区信息', async () => {
+  const { workspaces } = await mount()
+  expect(document.querySelector('.dsh-space-member-summary')).toBeNull()
+  await click('查看信息')
+  const panel = document.querySelector('.dsh-space-details')!
+  expect(panel.textContent).toContain('2 个成员')
+  expect(panel.textContent).toContain('主要')
+  expect(panel.querySelectorAll('.dsh-space-detail-member')).toHaveLength(2)
+  await click('打开成员目录 /a')
+  expect(workspaces.openPath).toHaveBeenCalledWith('/a')
+  await act(async () => panel.querySelector<HTMLButtonElement>('.dsh-space-detail-edit')!.click())
+  expect(document.querySelector('dialog')?.open).toBe(true)
+})
+
+it('会话悬浮预览只展示摘要，移入后仍可原位改名', async () => {
+  vi.useFakeTimers()
+  await mount()
+  await act(async () => {
+    const event = new Event('pointerover', { bubbles: true })
+    Object.assign(event, { pointerType: 'mouse' })
+    button('已有会话').dispatchEvent(event)
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  const panel = document.querySelector('.dsh-space-details.session')!
+  expect(panel.querySelector('.dsh-space-details-actions')).toBeNull()
+  expect(panel.querySelector('.dsh-space-detail-status')?.textContent).toBe('空闲')
+  expect(panel.querySelector('time')).not.toBeNull()
+  await act(async () => panel.querySelector<HTMLButtonElement>('.dsh-space-details-title')!.click())
+  expect(document.querySelector('input[aria-label="名称"]')).not.toBeNull()
+})
 
 describe('侧栏交互', () => {
   it('项目草稿高亮项目标题，不创建或选中虚构会话', async () => {
@@ -694,7 +758,7 @@ describe('侧栏交互', () => {
 
   it('成员修改是草稿，取消不写入且释放模式锁', async () => {
     const { mode } = await mount()
-    await click('2 个成员 · 主要 a')
+    await click('编辑成员')
     expect(document.querySelector('dialog')?.open).toBe(true)
     expect(mode.getSnapshot().blocked).toBe(true)
     await click('将 b 设为主要')
@@ -707,7 +771,7 @@ describe('侧栏交互', () => {
 
   it('整份草稿一次保存，携带原版本，失败保留输入', async () => {
     await mount()
-    await click('2 个成员 · 主要 a')
+    await click('编辑成员')
     await input('成员目录路径', '/c')
     await click('添加成员目录')
     operation.mockRejectedValueOnce(new Error('成员已在其他位置修改'))
@@ -727,7 +791,7 @@ describe('侧栏交互', () => {
 
   it('快速重复保存只产生一个请求，提交期间关闭无效', async () => {
     await mount()
-    await click('2 个成员 · 主要 a')
+    await click('编辑成员')
     let finish!: () => void
     operation.mockImplementation(
       () =>
@@ -752,9 +816,10 @@ describe('侧栏交互', () => {
 
   it('escape 关闭弹窗并将焦点还给入口', async () => {
     await mount()
-    const trigger = button('2 个成员 · 主要 a')
+    const trigger = button('演示空间 工作区操作')
+    await click('演示空间 工作区操作')
     trigger.focus()
-    await click('2 个成员 · 主要 a')
+    await click('编辑成员')
     await act(async () =>
       document
         .querySelector('dialog')!
@@ -766,7 +831,7 @@ describe('侧栏交互', () => {
   it('初始焦点跳过折叠详情中的输入，即使浏览器仍返回其布局尺寸', async () => {
     vi.spyOn(HTMLElement.prototype, 'getClientRects').mockReturnValue([{}] as unknown as DOMRectList)
     await mount()
-    await click('2 个成员 · 主要 a')
+    await click('编辑成员')
     expect(document.activeElement?.getAttribute('aria-label')).toBe('成员目录路径')
   })
 
@@ -809,7 +874,7 @@ describe('侧栏交互', () => {
     vi.mocked(workspaces.pickDirectory).mockImplementation(() => new Promise((resolve) => {
       finish = resolve
     }))
-    await click('2 个成员 · 主要 a')
+    await click('编辑成员')
     await click('选择成员目录')
     expect(document.querySelector('fieldset')?.disabled).toBe(true)
     await act(async () => document.querySelector('dialog')!.dispatchEvent(new Event('cancel', { cancelable: true })))

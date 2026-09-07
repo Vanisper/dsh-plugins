@@ -10,6 +10,7 @@ import type {
   RegistryPayload,
   SessionRow,
   SessionService,
+  SidebarPrimitives,
   SlotProps,
   WorkspaceService,
 } from './types.ts'
@@ -79,17 +80,34 @@ function message(error: unknown): string {
 function kindLabel(kind: RegistryItem['kind']): string {
   return kind === 'space' ? '空间' : kind === 'chat' ? '独立对话' : '目录'
 }
-function sessionStatus(session: SessionRow): {
-  className: string
+function updatedLabel(timestamp: number): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
+  return minutes < 1
+    ? '刚刚'
+    : minutes < 60
+      ? `${minutes} 分钟前`
+      : minutes < 1440
+        ? `${Math.floor(minutes / 60)} 小时前`
+        : `${Math.floor(minutes / 1440)} 天前`
+}
+function sessionStatus(session: SessionRow & { runningSubagentCount?: number }): {
+  state: 'ongoing' | 'warning' | 'done'
   label: string
+  visible: boolean
 } {
-  return session.pendingInteraction
-    ? { className: 'pending', label: '等待交互' }
-    : session.running
-      ? { className: 'running', label: '运行中' }
-      : session.completed
-        ? { className: 'completed', label: '完成未读' }
-        : { className: '', label: '空闲' }
+  if (session.pendingInteraction) {
+    const label = session.pendingInteraction === 'approval'
+      ? '等待审批'
+      : session.pendingInteraction === 'plan-review'
+        ? '等待计划审阅'
+        : session.pendingInteraction === 'question' ? '等待回答' : '等待交互'
+    return { state: 'warning', label, visible: true }
+  }
+  if (session.running)
+    return { state: 'ongoing', label: '运行中', visible: true }
+  if (session.runningSubagentCount)
+    return { state: 'ongoing', label: `${session.runningSubagentCount} 个子代理运行中`, visible: true }
+  return { state: 'done', label: session.completed ? '完成未读' : '空闲', visible: !!session.completed }
 }
 
 export function createSidebar(
@@ -98,6 +116,7 @@ export function createSidebar(
   workspaces: WorkspaceService,
   mode: ModeStore,
   draft: Pick<DraftSession, 'begin' | 'subscribe' | 'getSnapshot'>,
+  { StateDot }: SidebarPrimitives,
 ): (props: SlotProps) => unknown {
   const e = React.createElement
   const beginDraft = draft.begin
@@ -779,10 +798,11 @@ export function createSidebar(
             },
           },
           e('span', {
-            'className': `dsh-space-status ${status.className}`,
-            'role': 'img',
-            'aria-label': status.label,
-          }),
+            'className': 'dsh-space-status',
+            'role': status.visible ? 'img' : undefined,
+            'aria-label': status.visible ? status.label : undefined,
+            'aria-hidden': status.visible ? undefined : true,
+          }, status.visible ? e(StateDot, { state: status.state }) : null),
           e(
             'span',
             { className: 'dsh-space-session-title' },
@@ -845,9 +865,6 @@ export function createSidebar(
     }
     const renderGroup = (item: RegistryItem, rows: SessionView[]): unknown => {
       const open = !collapsed.includes(item.workspaceId)
-      const primary = item.members?.find(
-        member => member.path === item.primary,
-      )
       return e(
         'section',
         {
@@ -927,21 +944,6 @@ export function createSidebar(
             actions: workspaceActions(item),
           }),
         ),
-        open && item.kind === 'space'
-          ? e(
-              'button',
-              {
-                type: 'button',
-                className: 'dsh-space-member-summary',
-                title: item.members?.map(member => member.path).join('\n'),
-                disabled: busy,
-                onClick: () => begin({ type: 'edit-space', item }),
-              },
-              item.members?.length
-                ? `${item.members.length} 个成员${primary ? ` · 主要 ${memberLabel(primary)}` : ''}`
-                : '添加成员目录',
-            )
-          : null,
         open ? renderLimited(rows, `workspace:${item.workspaceId}`, item.title, row => row.id === sessionState.current, session => renderSession(session, item)) : null,
       )
     }
@@ -1482,12 +1484,14 @@ export function createSidebar(
         stopInfoTimer()
         setInfo(null)
       }
-      const primary = item?.members?.find(member => member.path === item.primary)
+      const row = session && (item ? buckets.rows.get(item.workspaceId) : buckets.misc)?.find(row => row.id === session.id)
+      const status = session ? sessionStatus(row ?? session) : undefined
       return e(
         Details,
         {
           key: `${JSON.stringify(target)}:${info.edit}:${info.focus}`,
           title,
+          variant: session ? 'session' : 'workspace',
           label: target.kind === 'workspace' ? '工作区信息' : '会话信息',
           anchor: info.anchor,
           edit: info.edit,
@@ -1506,7 +1510,17 @@ export function createSidebar(
           onLeave: leaveInfo,
         },
         session
-          ? e('div', { className: 'dsh-space-muted' }, `${sessionStatus(session).label} · ${new Date(session.updatedAt).toLocaleString()}`)
+          ? e(
+              'div',
+              { className: 'dsh-space-detail-meta' },
+              !session.blank && Number.isFinite(session.updatedAt)
+                ? e('time', { className: 'dsh-space-muted', dateTime: new Date(session.updatedAt).toISOString(), title: new Date(session.updatedAt).toLocaleString() }, updatedLabel(session.updatedAt))
+                : null,
+              e('div', { className: 'dsh-space-detail-status' }, e(StateDot, { state: status!.state }), status!.label),
+              row?.runningSubagentCount && (session.running || session.pendingInteraction)
+                ? e('div', { className: 'dsh-space-detail-status' }, e(StateDot, { state: 'ongoing' }), `${row.runningSubagentCount} 个子代理运行中`)
+                : null,
+            )
           : e('div', { className: 'dsh-space-muted' }, `${kindLabel(item!.kind)} · ${buckets.rows.get(item!.workspaceId)?.length ?? 0} 个会话`),
         !session && item
           ? e(
@@ -1533,44 +1547,67 @@ export function createSidebar(
           : null,
         !session && item?.kind === 'space'
           ? e(
-              'button',
-              { type: 'button', className: 'dsh-space-detail-path', onClick: () => begin({ type: 'edit-space', item }) },
-              e(Icon, { name: 'settings' }),
-              `${item.members?.length ?? 0} 个成员${primary ? ` · 主要 ${memberLabel(primary)}` : ''}`,
+              'div',
+              { className: 'dsh-space-detail-members' },
+              e('div', { className: 'dsh-space-muted' }, `${item.members?.length ?? 0} 个成员`),
+              item.members?.map(member => e(
+                'button',
+                {
+                  'key': member.path,
+                  'type': 'button',
+                  'className': 'dsh-space-detail-path dsh-space-detail-member',
+                  'aria-label': `打开成员目录 ${member.path}`,
+                  'disabled': busy,
+                  'onClick': () => perform(() => workspaces.openPath(member.path)),
+                },
+                e(Icon, { name: 'folder', size: 14 }),
+                e(
+                  'span',
+                  { className: 'dsh-space-detail-member-text' },
+                  e('span', null, memberLabel(member), member.path === item.primary ? e('small', { className: 'dsh-space-detail-primary' }, '主要') : null),
+                  e('code', null, member.path),
+                  member.description ? e('small', { className: 'dsh-space-muted' }, member.description) : null,
+                ),
+              )),
             )
           : null,
-        e(
-          'div',
-          { className: 'dsh-space-details-actions' },
-          e(IconButton, {
-            icon: isPinned(target) ? 'unpin' : 'pin',
-            label: isPinned(target) ? '取消置顶' : '置顶',
-            disabled: busy,
-            onClick: () => {
-              dismiss()
-              pinAction(target).run()
-            },
-          }),
-          session
-            ? e(IconButton, {
-                icon: 'archive',
-                label: '归档会话',
+        !session || info.focus || info.edit
+          ? e(
+              'div',
+              { className: 'dsh-space-details-actions' },
+              !session && item?.kind === 'space'
+                ? e('button', { type: 'button', className: 'dsh-space-detail-edit', disabled: busy, onClick: () => begin({ type: 'edit-space', item }) }, e(Icon, { name: 'settings', size: 14 }), '编辑成员')
+                : null,
+              e(IconButton, {
+                icon: isPinned(target) ? 'unpin' : 'pin',
+                label: isPinned(target) ? '取消置顶' : '置顶',
                 disabled: busy,
                 onClick: () => {
                   dismiss()
-                  archive(session)
-                },
-              })
-            : e(IconButton, {
-                icon: 'chat',
-                label: '新建会话',
-                disabled: busy,
-                onClick: () => {
-                  dismiss()
-                  beginDraft(item!.workspaceId)
+                  pinAction(target).run()
                 },
               }),
-        ),
+              session
+                ? e(IconButton, {
+                    icon: 'archive',
+                    label: '归档会话',
+                    disabled: busy,
+                    onClick: () => {
+                      dismiss()
+                      archive(session)
+                    },
+                  })
+                : e(IconButton, {
+                    icon: 'chat',
+                    label: '新建会话',
+                    disabled: busy,
+                    onClick: () => {
+                      dismiss()
+                      beginDraft(item!.workspaceId)
+                    },
+                  }),
+            )
+          : null,
       )
     }
     const openSearch = (): void => {

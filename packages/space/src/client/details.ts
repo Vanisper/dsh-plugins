@@ -3,6 +3,7 @@ import { createControls } from './controls.ts'
 
 interface DetailsProps {
   title: string
+  variant: 'session' | 'workspace'
   label: string
   anchor: HTMLElement
   edit: boolean
@@ -119,7 +120,7 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
         'role': 'dialog',
         'aria-label': label,
         'aria-busy': busy,
-        'className': 'dsh-space-details',
+        'className': `dsh-space-details ${props.variant}`,
         'onPointerEnter': props.onEnter,
         'onPointerLeave': props.onLeave,
       },

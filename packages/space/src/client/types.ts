@@ -146,3 +146,8 @@ export interface ReactLike {
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => void
   useSyncExternalStore: <T>(subscribe: (fn: () => void) => () => void, snapshot: () => T) => T
 }
+
+/** 宿主公开状态组件，侧栏只负责状态语义与占位布局 */
+export interface SidebarPrimitives {
+  StateDot: (props: { state: 'ongoing' | 'warning' | 'done', size?: number }) => unknown
+}

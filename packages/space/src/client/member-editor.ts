@@ -58,9 +58,16 @@ export function createMemberEditor(
             { duration: 180, easing: 'ease-out' },
           )
         }
-        positions.current.set(path, top)
       }
-    }, [draft.primary, draft.members])
+      positions.current.clear()
+    }, [draft.primary])
+    const selectPrimary = (path: string): void => {
+      // 只为用户触发的重排采集可见坐标，避免弹窗显示前的零坐标和编辑区展开影响动画
+      positions.current.clear()
+      for (const row of list.current?.querySelectorAll<HTMLElement>('[data-member-path]') ?? [])
+        positions.current.set(row.dataset.memberPath!, row.offsetTop)
+      setDraft({ ...draft, primary: path })
+    }
     const add = (value: string): void => {
       const next = value.trim()
       if (!next)
@@ -138,7 +145,7 @@ export function createMemberEditor(
                     : `将 ${memberLabel(member)} 设为主要`,
                 'title': member.path === draft.primary ? '当前主成员' : '设为主要',
                 'checked': member.path === draft.primary,
-                'onChange': () => setDraft({ ...draft, primary: member.path }),
+                'onChange': () => selectPrimary(member.path),
               }),
               e(IconButton, {
                 icon: 'close',

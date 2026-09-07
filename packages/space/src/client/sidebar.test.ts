@@ -949,6 +949,34 @@ describe('侧栏交互', () => {
     expect(mode.getSnapshot().blocked).toBe(false)
   })
 
+  it.each(['名称', '主成员'] as const)('首次编辑%s 不使用弹窗显示前的成员坐标', async (change) => {
+    await mount()
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: false } as MediaQueryList)
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
+      if (!this.closest('dialog')?.open || !this.matches('[data-member-path]'))
+        return 0
+      const rows = Array.from(this.parentElement!.children)
+      return 200 + rows.indexOf(this) * 100
+    })
+    await click('编辑工作区')
+    const animate = vi.fn()
+    for (const row of document.querySelectorAll<HTMLElement>('[data-member-path]'))
+      row.animate = animate
+    if (change === '名称') {
+      await input('/a 显示名称', '首次输入')
+      expect(animate).not.toHaveBeenCalled()
+      await input('/a 显示名称', '再次输入')
+      expect(animate).not.toHaveBeenCalled()
+    }
+    else {
+      await act(async () => document.querySelector<HTMLInputElement>('[aria-label="将 b 设为主要"]')!.click())
+      expect(animate.mock.calls.map(([frames]) => frames[0].transform)).toEqual(['translateY(100px)', 'translateY(-100px)'])
+      animate.mockClear()
+      await input('/b 显示名称', '切换主要后的输入')
+      expect(animate).not.toHaveBeenCalled()
+    }
+  })
+
   it('编辑工作区包含名称、只读工作目录和移除入口，输入法确认不保存表单', async () => {
     const { workspaces } = await mount()
     await click('编辑工作区')

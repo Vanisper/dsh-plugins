@@ -103,7 +103,7 @@ export const sidebarCss = `
 .dsh-space-button.danger{background:var(--dsw-alias-state-error-primary,#c44242);color:white;border-color:transparent}
 .dsh-space-path-field{display:flex;align-items:center;gap:6px;min-width:0}
 .dsh-space-path-field input{flex:1}
-.dsh-space-member-list{display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l2,#8883)}
+.dsh-space-member-list{position:relative;display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l2,#8883)}
 .dsh-space-member{border-bottom:1px solid var(--dsw-alias-border-l2,#8883);padding:10px 0;min-width:0}
 .dsh-space-member-head{display:flex;align-items:center;gap:8px;min-height:38px}
 .dsh-space-member-main{flex:1;min-width:0}

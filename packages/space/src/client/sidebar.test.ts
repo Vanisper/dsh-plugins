@@ -254,6 +254,47 @@ it('会话悬浮预览只展示摘要，移入后仍可原位改名', async () =
 })
 
 describe('侧栏交互', () => {
+  it.each(['composition', 'isComposing', '229'] as const)('输入法确认不隐式提交改名，独立 Enter 才保存：%s', async (kind) => {
+    const { workspaces } = await mount()
+    await click('查看信息')
+    await click('演示空间')
+    await input('名称', 'ceshi')
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="名称"]')!
+    const form = field.closest('form')!
+    await act(async () => {
+      field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+      if (kind !== 'composition')
+        field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+      const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: kind === 'isComposing', keyCode: kind === '229' ? 229 : 13 })
+      field.dispatchEvent(enter)
+      // jsdom 不执行浏览器的隐式表单提交，按默认事件是否被取消重放
+      if (!enter.defaultPrevented)
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    expect(workspaces.rename).not.toHaveBeenCalled()
+    expect(field.isConnected).toBe(true)
+    await act(async () => {
+      field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+      const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      field.dispatchEvent(enter)
+      if (!enter.defaultPrevented)
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    expect(workspaces.rename).toHaveBeenCalledExactlyOnceWith('w', 'ceshi')
+  })
+
+  it('输入法 Escape 只取消候选，不退出名称编辑', async () => {
+    await mount()
+    await click('查看信息')
+    await click('演示空间')
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="名称"]')!
+    await act(async () => {
+      field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+      field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, isComposing: true }))
+    })
+    expect(field.isConnected).toBe(true)
+  })
+
   it('项目草稿高亮项目标题，不创建或选中虚构会话', async () => {
     const { draft, sessions } = await mount()
     await act(async () => draft.begin('w'))

@@ -1,5 +1,6 @@
 import type { ReactLike } from './types.ts'
 import { createControls } from './controls.ts'
+import { createImeGuard } from './ime.ts'
 
 interface DetailsProps {
   title: string
@@ -30,6 +31,7 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
     const input = React.useRef<HTMLInputElement | null>(null)
     const editButton = React.useRef<HTMLButtonElement | null>(null)
     const busyRef = React.useRef(false)
+    const ime = React.useMemo(createImeGuard, [])
     const latest = React.useRef({ editing, title, onClose, onEditingChange })
     latest.current = { editing, title, onClose, onEditingChange }
     const cancel = (): void => {
@@ -61,7 +63,7 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
           latest.current.onClose()
       }
       const escape = (event: KeyboardEvent): void => {
-        if (event.key !== 'Escape')
+        if (event.key !== 'Escape' || ime.active(event))
           return
         event.preventDefault()
         event.stopPropagation()
@@ -97,7 +99,7 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
       }
     }, [editing])
     const save = (): void => {
-      if (busyRef.current || !draft.trim() || draft.trim() === title)
+      if (busyRef.current || ime.active() || !draft.trim() || draft.trim() === title)
         return
       busyRef.current = true
       setBusy(true)
@@ -132,6 +134,12 @@ export function createDetails(React: ReactLike): (props: DetailsProps) => unknow
               'form',
               {
                 className: 'dsh-space-inline-rename',
+                onCompositionStart: ime.start,
+                onCompositionEnd: ime.end,
+                onKeyDown: (event: { key: string, nativeEvent: KeyboardEvent, preventDefault: () => void }) => {
+                  if (event.key === 'Enter' && ime.active(event.nativeEvent))
+                    event.preventDefault()
+                },
                 onSubmit: (event: Event) => {
                   event.preventDefault()
                   save()

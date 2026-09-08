@@ -162,7 +162,7 @@ export function tooltipProps(label: string): Record<string, unknown> {
     hideHint()
     const anchor = event.currentTarget
     hintTimer = setTimeout(() => {
-      if (!anchor.isConnected || hasOpenMenu())
+      if (!anchor.isConnected || hasOpenMenu() || document.body.hasAttribute('data-dsh-space-dragging'))
         return
       const node = document.createElement('div')
       node.textContent = label

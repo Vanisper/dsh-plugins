@@ -1128,6 +1128,95 @@ describe('侧栏交互', () => {
     expect(listSort(createLayoutStore().getSnapshot(), 'project:workspaces')).toBe('updated')
   })
 
+  it('项目拖动用完整块的上下边界，取消后不留下落点或写请求', async () => {
+    const { workspaces } = await mountOrdering()
+    const source = document.querySelectorAll('.dsh-space-heading')[0]!
+    const target = document.querySelectorAll('.dsh-space-group')[1]!
+    target.getBoundingClientRect = () => ({ top: 100, height: 200 }) as DOMRect
+    await act(async () => source.dispatchEvent(new Event('dragstart', { bubbles: true })))
+    await act(async () => target.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 160 })))
+    expect(target.classList.contains('drop-before')).toBe(true)
+    await act(async () => target.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 280 })))
+    expect(target.classList.contains('drop-after')).toBe(true)
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(document.querySelector('.drop-after,.drop-before')).toBeNull()
+    await act(async () => target.dispatchEvent(new MouseEvent('drop', { bubbles: true, cancelable: true, clientY: 280 })))
+    expect(workspaces.insertBefore).not.toHaveBeenCalled()
+    await act(async () => {
+      source.dispatchEvent(new Event('dragstart', { bubbles: true }))
+      target.dispatchEvent(new MouseEvent('drop', { bubbles: true, cancelable: true, clientY: 280 }))
+    })
+    expect(workspaces.insertBefore).toHaveBeenLastCalledWith('w', undefined)
+  })
+
+  it('折叠组拖入使用分配高亮，预览和取消不写折叠或归属偏好', async () => {
+    vi.useFakeTimers()
+    const layout = createLayoutStore()
+    layout.saveGroup({ id: 'g', title: '计划', color: 'blue', collapsed: true }, true)
+    layout.setView('groups')
+    const { workspaces } = await mount()
+    const source = document.querySelector('.dsh-space-session-main')!
+    const target = document.querySelector('[data-display-group="g"]')!
+    await act(async () => source.dispatchEvent(new Event('dragstart', { bubbles: true })))
+    await act(async () => target.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true })))
+    expect(target.classList.contains('drop-assign')).toBe(true)
+    await act(async () => vi.advanceTimersByTimeAsync(650))
+    expect(button('计划 新建会话占位')).toBeDefined()
+    expect(createLayoutStore().getSnapshot().groups[0]!.collapsed).toBe(true)
+    await act(async () => source.dispatchEvent(new Event('dragend', { bubbles: true })))
+    expect(target.querySelector('.dsh-space-group-placeholder')).toBeNull()
+    expect(createLayoutStore().getSnapshot().assignments).toEqual({})
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+  })
+
+  it('大分区与自建组支持向后落点，分组调序不改变会话归属', async () => {
+    const { workspaceSnapshot } = await mount()
+    const project = document.querySelector('[data-section="chats"]')!
+    const misc = document.querySelector('[data-section="workspaces"]')!
+    misc.getBoundingClientRect = () => ({ top: 100, height: 100 }) as DOMRect
+    await act(async () => {
+      project.querySelector('.dsh-space-section-title')!.dispatchEvent(new Event('dragstart', { bubbles: true }))
+      misc.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 190 }))
+    })
+    expect(misc.classList.contains('drop-after')).toBe(true)
+    await act(async () => misc.dispatchEvent(new MouseEvent('drop', { bubbles: true, cancelable: true, clientY: 190 })))
+    expect(createLayoutStore().getSnapshot().sections.indexOf('chats')).toBeGreaterThan(createLayoutStore().getSnapshot().sections.indexOf('workspaces'))
+    const layout = createLayoutStore()
+    layout.saveGroup({ id: 'a', title: '甲', color: 'gray', collapsed: false }, true)
+    layout.saveGroup({ id: 'b', title: '乙', color: 'gray', collapsed: false }, true)
+    await act(async () => window.dispatchEvent(new StorageEvent('storage', { key: 'dsh-space.sidebar.layout' })))
+    await click('分组视图')
+    const a = document.querySelector('[data-display-group="a"]')!
+    const b = document.querySelector('[data-display-group="b"]')!
+    b.getBoundingClientRect = () => ({ top: 100, height: 100 }) as DOMRect
+    await act(async () => {
+      a.querySelector('.dsh-space-section-title')!.dispatchEvent(new Event('dragstart', { bubbles: true }))
+      b.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 190 }))
+    })
+    expect(b.classList.contains('drop-after')).toBe(true)
+    await act(async () => b.dispatchEvent(new MouseEvent('drop', { bubbles: true, cancelable: true, clientY: 190 })))
+    expect(createLayoutStore().getSnapshot().groups.map(group => group.id)).toEqual(['b', 'a'])
+    expect(workspaceSnapshot.items[0]!.sessionIds).toEqual(['s'])
+  })
+
+  it('混合置顶支持会话下半区落点，只调整置顶展示顺序', async () => {
+    const layout = createLayoutStore()
+    layout.setPinned({ kind: 'workspace', id: 'w' }, true)
+    layout.setPinned({ kind: 'session', id: 'other' }, true)
+    layout.setListSort('project:pinned', 'manual')
+    const { workspaces } = await mountOrdering()
+    const source = document.querySelector('[data-section="pinned"] .dsh-space-heading')!
+    const target = document.querySelector('[data-section="pinned"] [data-session-id="other"]')!
+    target.getBoundingClientRect = () => ({ top: 100, height: 30 }) as DOMRect
+    await act(async () => source.dispatchEvent(new Event('dragstart', { bubbles: true })))
+    await act(async () => target.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 128 })))
+    expect(target.classList.contains('drop-after')).toBe(true)
+    await act(async () => target.dispatchEvent(new MouseEvent('drop', { bubbles: true, cancelable: true, clientY: 128 })))
+    expect(createLayoutStore().getSnapshot().orders['project:pinned']).toEqual(['session:other', 'workspace:w'])
+    expect(workspaces.insertBefore).not.toHaveBeenCalled()
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+  })
+
   it('会话菜单按当前显示顺序上移，也会自动切换项目排序', async () => {
     const { workspaces } = await mountOrdering()
     await act(async () => {

@@ -481,7 +481,20 @@ export function createControls(React: ReactLike): Controls {
           .find(input => !input.closest('details:not([open])') && input.getClientRects().length > 0)
           ?.focus()
       })
+      // 宿主在 document 上接收所有 Files；模态遮罩不阻止拖拽事件冒泡
+      const fileEvents = ['dragenter', 'dragover', 'dragleave', 'drop'] as const
+      const blockFiles = (event: DragEvent): void => {
+        if (!element.open || !event.dataTransfer?.types.includes('Files'))
+          return
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        event.dataTransfer.dropEffect = 'none'
+      }
+      for (const type of fileEvents)
+        window.addEventListener(type, blockFiles, true)
       return () => {
+        for (const type of fileEvents)
+          window.removeEventListener(type, blockFiles, true)
         withoutFocusHint(() => {
           element.close()
           if (previous?.isConnected)

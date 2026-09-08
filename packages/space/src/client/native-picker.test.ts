@@ -35,7 +35,7 @@ it.each(['选择', '取消', '失败'])('原生请求%s后释放所有输入拦�
   expect(nativePickerActive()).toBe(true)
   for (const type of ['keydown', 'keyup', 'keypress'])
     expect(key(type).defaultPrevented).toBe(true)
-  for (const type of ['pointerdown', 'click', 'wheel', 'touchmove']) {
+  for (const type of ['pointerdown', 'click', 'wheel', 'touchmove', 'dragenter', 'dragover', 'dragleave', 'drop']) {
     const event = new Event(type, { bubbles: true, cancelable: true })
     document.body.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(true)

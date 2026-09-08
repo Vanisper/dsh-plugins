@@ -1818,6 +1818,51 @@ describe('侧栏交互', () => {
     expect(document.querySelector('[aria-label="目录完整路径"]')).toBeNull()
   })
 
+  it.each(['dragenter', 'dragover', 'dragleave', 'drop'])('文件 %s 在工作区表单及遮罩内不传给后台图片上传', async (type) => {
+    await mount()
+    await click('创建工作区')
+    const upload = vi.fn()
+    document.addEventListener(type, upload)
+    try {
+      for (const target of [document.querySelector('.dsh-space-member-list')!, document.body]) {
+        const event = new Event(type, { bubbles: true, cancelable: true })
+        const dataTransfer = { types: ['Files'], dropEffect: 'copy' }
+        Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
+        await act(async () => target.dispatchEvent(event))
+        expect(upload).not.toHaveBeenCalled()
+        expect(event.defaultPrevented).toBe(true)
+        expect(dataTransfer.dropEffect).toBe('none')
+      }
+      expect(document.querySelector('[data-member-path]')).toBeNull()
+      expect(operation).not.toHaveBeenCalled()
+    }
+    finally {
+      document.removeEventListener(type, upload)
+    }
+  })
+
+  it('弹窗保留文本拖拽，关闭及卸载后恢复宿主文件拖拽', async () => {
+    await mount()
+    const emit = (types: string[]): Event => {
+      const event = new Event('dragenter', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'dataTransfer', { value: { types } })
+      document.body.dispatchEvent(event)
+      return event
+    }
+    expect(emit(['Files']).defaultPrevented).toBe(false)
+    await click('创建工作区')
+    expect(emit(['text/plain']).defaultPrevented).toBe(false)
+    expect(emit([]).defaultPrevented).toBe(false)
+    expect(emit(['Files']).defaultPrevented).toBe(true)
+    await click('取消')
+    expect(emit(['Files']).defaultPrevented).toBe(false)
+    await click('创建工作区')
+    expect(emit(['Files']).defaultPrevented).toBe(true)
+    await cleanup?.()
+    cleanup = undefined
+    expect(emit(['Files']).defaultPrevented).toBe(false)
+  })
+
   it('创建类型往返保留唯一工作目录和其他成员，更换工作目录时不重复为成员', async () => {
     const { workspaces } = await mount()
     await click('创建工作区')

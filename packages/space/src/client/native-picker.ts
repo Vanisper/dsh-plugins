@@ -15,10 +15,13 @@ export function subscribeNativePicker(listener: () => void): () => void {
 }
 
 function holdPageInput(): () => void {
-  const events = ['keydown', 'keyup', 'keypress', 'pointerdown', 'pointerup', 'click', 'dblclick', 'contextmenu', 'wheel', 'touchstart', 'touchmove', 'dragstart', 'drop']
+  const events = ['keydown', 'keyup', 'keypress', 'pointerdown', 'pointerup', 'click', 'dblclick', 'contextmenu', 'wheel', 'touchstart', 'touchmove', 'dragstart', 'dragenter', 'dragover', 'dragleave', 'drop']
   const block = (event: Event): void => {
     event.preventDefault()
     event.stopImmediatePropagation()
+    const transfer = (event as DragEvent).dataTransfer
+    if (transfer)
+      transfer.dropEffect = 'none'
   }
   for (const event of events)
     window.addEventListener(event, block, { capture: true, passive: false })

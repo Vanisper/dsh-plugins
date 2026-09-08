@@ -1566,11 +1566,11 @@ describe('侧栏交互', () => {
     await mount()
     await click('项目')
     expect(document.querySelector('.dsh-space-group')).toBeNull()
-    expect(button('添加工作区').disabled).toBe(false)
+    expect(button('创建工作区').disabled).toBe(false)
     await click('下移分区')
     expect(Array.from(document.querySelectorAll('[data-section]')).map(node => node.getAttribute('data-section'))).toEqual(['workspaces', 'chats'])
-    await click('创建空间')
-    expect(document.querySelector('dialog')?.getAttribute('aria-label')).toBe('创建空间')
+    await click('创建工作区')
+    expect(document.querySelector('dialog')?.getAttribute('aria-label')).toBe('创建工作区')
   })
 
   it('失效置顶不撑起空分区，首个有效置顶显示，移除最后一项再次隐藏', async () => {
@@ -1755,7 +1755,7 @@ describe('侧栏交互', () => {
     const { workspaces } = await mount()
     await click('编辑工作区')
     await addMember(workspaces)
-    const toggle = () => act(async () => document.querySelector<HTMLInputElement>('[aria-label="作为空间"]')!.click())
+    const toggle = () => act(async () => document.querySelector<HTMLButtonElement>('[role="radiogroup"][aria-label="工作区类型"] [aria-checked="false"]')!.click())
     await toggle()
     expect(document.querySelector('.dsh-space-change-warning')?.textContent).toContain('2 项成员配置')
     await toggle()
@@ -1792,14 +1792,105 @@ describe('侧栏交互', () => {
   it('选择普通目录预填名称，重复登记不会向已有工作区创建会话', async () => {
     const { item, workspaces, beginDraft } = await mount()
     vi.mocked(workspaces.create).mockResolvedValue(item)
-    await click('添加目录工作区')
+    await click('创建工作区')
+    await click('目录')
     expect(document.querySelector('[aria-label="目录完整路径"]')).toBeNull()
     await click('选择目录')
     expect(document.querySelector<HTMLInputElement>('[aria-label="工作区名称"]')?.value).toBe('picked')
-    expect(button('选择目录').textContent).toBe('/picked')
-    await click('添加')
+    expect(button('选择目录').textContent).toContain('/picked')
+    await click('创建工作区')
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('此目录已登记')
     expect(beginDraft).not.toHaveBeenCalled()
+  })
+
+  it('统一入口默认空间，选择器的新建事件打开同一表单', async () => {
+    await mount()
+    expect(document.querySelector('[aria-label="添加工作区"]')).toBeNull()
+    await act(async () => window.dispatchEvent(new Event('dsh-space-create-workspace')))
+    expect(document.querySelector('dialog')?.getAttribute('aria-label')).toBe('创建工作区')
+    expect(button('空间').getAttribute('aria-checked')).toBe('true')
+    expect(document.querySelector('.dsh-space-add-member.empty')).not.toBeNull()
+    expect(document.querySelector('.dsh-space-working-directory.pending')?.textContent).toContain('新建')
+    await input('工作区名称', '示例')
+    expect(document.querySelector('.dsh-space-working-directory.pending')?.textContent).toContain('/root/spaces/示例')
+    await click('目录')
+    expect(button('创建工作区').disabled).toBe(true)
+    expect(document.querySelector('[aria-label="目录完整路径"]')).toBeNull()
+  })
+
+  it('创建类型往返保留唯一工作目录和其他成员，更换工作目录时不重复为成员', async () => {
+    const { workspaces } = await mount()
+    await click('创建工作区')
+    await addMember(workspaces, '/first')
+    await addMember(workspaces, '/second')
+    await addMember(workspaces, '/third')
+    await click('目录')
+    expect(button('选择目录').textContent).toBe('选择文件夹')
+    expect(document.querySelector('[data-member-path]')).toBeNull()
+    expect(document.querySelector('.dsh-space-change-warning')?.textContent).toContain('3 项成员')
+    await click('空间')
+    expect(document.querySelector('.dsh-space-working-directory.pending')).not.toBeNull()
+    expect(document.querySelectorAll('[data-member-path]')).toHaveLength(3)
+    await click('目录')
+    vi.mocked(workspaces.pickDirectory).mockResolvedValueOnce('/second/')
+    await click('选择目录')
+    await click('空间')
+    expect(button('选择目录').textContent).toContain('/second/')
+    expect(Array.from(document.querySelectorAll('[data-member-path]')).map(row => row.getAttribute('data-member-path'))).toEqual(['/first', '/third'])
+    expect(document.querySelector('.dsh-space-working-directory.pending')).toBeNull()
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('单目录创建切为空间仍使用所选目录，不生成另一工作目录', async () => {
+    const { workspaces, workspaceSnapshot, beginDraft } = await mount()
+    vi.mocked(workspaces.create).mockImplementation(async ({ path }) => {
+      const item: RegistryItem = { kind: 'plain', workspaceId: 'new', title: 'picked', path, sessionIds: [] }
+      workspaceSnapshot.items.push(item)
+      fixture.registry = { ...fixture.registry!, items: [...fixture.registry!.items, item] }
+      return item
+    })
+    await click('创建工作区')
+    await click('目录')
+    const picker = button('选择目录')
+    await click('选择目录')
+    expect(button('选择目录')).toBe(picker)
+    await click('空间')
+    await addMember(workspaces, '/member')
+    await click('创建工作区')
+    expect(workspaces.create).toHaveBeenCalledExactlyOnceWith({ path: '/picked' })
+    expect(operation).toHaveBeenCalledExactlyOnceWith({ op: 'enhance-space', workspace: 'new', members: [{ path: '/member', mode: 'reference' }], primary: '/member' })
+    expect(beginDraft).toHaveBeenCalledWith('new')
+    expect(document.querySelector('dialog')).toBeNull()
+  })
+
+  it('目录登记后改名失败显示继续完成，重试不重复登记或增强', async () => {
+    const { workspaces, workspaceSnapshot, beginDraft } = await mount()
+    vi.mocked(workspaces.create).mockImplementation(async ({ path }) => {
+      const item: RegistryItem = { kind: 'plain', workspaceId: 'new', title: 'picked', path, sessionIds: [] }
+      workspaceSnapshot.items.push(item)
+      fixture.registry = { ...fixture.registry!, items: [...fixture.registry!.items, item] }
+      return item
+    })
+    vi.mocked(workspaces.rename).mockRejectedValueOnce(new Error('改名失败')).mockImplementationOnce(async (id, title) => {
+      const item = fixture.registry!.items.find(item => item.workspaceId === id)!
+      item.title = title
+      return item
+    })
+    await click('创建工作区')
+    await click('目录')
+    await click('选择目录')
+    await click('空间')
+    await input('工作区名称', '新名称')
+    await click('创建工作区')
+    expect(document.querySelector('dialog')?.getAttribute('aria-label')).toBe('完成工作区创建')
+    expect(button('空间').disabled).toBe(true)
+    expect(document.querySelector('fieldset')?.disabled).toBe(false)
+    expect(beginDraft).not.toHaveBeenCalled()
+    await click('继续完成')
+    expect(workspaces.create).toHaveBeenCalledTimes(1)
+    expect(operation).toHaveBeenCalledTimes(1)
+    expect(workspaces.rename).toHaveBeenCalledTimes(2)
+    expect(beginDraft).toHaveBeenCalledWith('new')
   })
 
   it.each(['名称', '主成员'] as const)('首次编辑%s 不使用弹窗显示前的成员坐标', async (change) => {
@@ -1833,8 +1924,8 @@ describe('侧栏交互', () => {
   it('编辑工作区包含名称、只读工作目录和移除入口，输入法确认不保存表单', async () => {
     const { workspaces } = await mount()
     await click('编辑工作区')
-    expect(document.querySelector('.dsh-space-workspace-path')?.textContent).toContain('/workspace')
-    expect(document.querySelector('.dsh-space-workspace-path input')).toBeNull()
+    expect(document.querySelector('.dsh-space-working-directory')?.textContent).toContain('/workspace')
+    expect(document.querySelector('.dsh-space-working-directory input')).toBeNull()
     expect(button('移除工作区').disabled).toBe(false)
     await input('工作区名称', 'ce shi')
     await act(async () => {
@@ -1856,14 +1947,15 @@ describe('侧栏交互', () => {
     expect(document.querySelector('.dsh-space-workspace-icon.space')).toBeNull()
     expect(document.querySelector('.dsh-space-heading')?.getAttribute('aria-description')).toBeNull()
     await click('编辑工作区')
-    expect(document.querySelector('.dsh-space-member-list')!.closest('[hidden]')).not.toBeNull()
-    await act(async () => document.querySelector<HTMLInputElement>('.dsh-space-enhance input')!.click())
+    expect(document.querySelectorAll('[data-member-path]')).toHaveLength(0)
+    expect(document.querySelector('.dsh-space-working-directory')?.textContent).toContain('/workspace')
+    await click('空间')
     await addMember(workspaces)
     expect(operation).not.toHaveBeenCalled()
     await click('取消')
     expect(workspaces.rename).not.toHaveBeenCalled()
     await click('编辑工作区')
-    expect(document.querySelector<HTMLInputElement>('.dsh-space-enhance input')?.checked).toBe(false)
+    expect(button('目录').getAttribute('aria-checked')).toBe('true')
   })
 
   it('工作区名称保存失败后保留已保存成员，重试只改名', async () => {
@@ -1999,9 +2091,9 @@ describe('侧栏交互', () => {
 
   it('收起侧栏也能显示创建弹窗，不依赖展开成功', async () => {
     await mount(false)
-    await click('创建空间')
+    await click('创建工作区')
     expect(document.querySelector('dialog')?.getAttribute('aria-label')).toBe(
-      '创建空间',
+      '创建工作区',
     )
   })
 
@@ -2043,8 +2135,8 @@ describe('侧栏交互', () => {
 
   it.each([
     ['编辑工作区', '添加成员目录'],
-    ['创建空间', '添加成员目录'],
-    ['添加目录工作区', '选择目录'],
+    ['创建工作区', '添加成员目录'],
+    ['创建工作区', '选择目录'],
   ])('原生选择器等待期间拦截网页键盘事件：%s', async (title, picker) => {
     const { workspaces } = await mount()
     let finish!: (path: string | null) => void
@@ -2052,6 +2144,8 @@ describe('侧栏交互', () => {
       finish = resolve
     }))
     await click(title)
+    if (picker === '选择目录')
+      await click('目录')
     await click(picker)
     const shortcut = vi.fn()
     document.addEventListener('keydown', shortcut)
@@ -2074,10 +2168,10 @@ describe('侧栏交互', () => {
   it('创建成功但列表未同步时锁定已提交草稿，重试只进入原工作区', async () => {
     vi.useFakeTimers()
     const { workspaces, beginDraft } = await mount(false)
-    await click('创建空间')
-    await input('空间名称', '新空间')
+    await click('创建工作区')
+    await input('工作区名称', '新空间')
     operation.mockResolvedValueOnce({ space: { workspaceId: 'new' } })
-    await click('创建空间')
+    await click('创建工作区')
     await act(async () => vi.advanceTimersByTimeAsync(5100))
     expect(document.querySelector('fieldset')?.disabled).toBe(true)
     expect(document.querySelector('dialog')?.textContent).toContain('工作区已创建')

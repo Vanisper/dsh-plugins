@@ -31,14 +31,15 @@ async function _modalFocusRegression(page) {
       { trigger: '零成员验收空间 工作区操作', item: '重命名', title: '重命名工作区' },
       { trigger: '零成员验收空间 会话操作', item: '重命名', title: '重命名会话' },
       { trigger: '零成员验收空间 工作区操作', item: '编辑工作区', title: '编辑工作区' },
-      { trigger: '添加工作区', item: '创建空间', title: '创建空间' },
-      { trigger: '添加工作区', item: '添加目录工作区', title: '添加目录工作区' },
-      { trigger: '选择工作区', title: '选择工作区' },
+      { trigger: '创建工作区', title: '创建工作区' },
+      { trigger: '创建工作区', title: '创建工作区', mode: '目录' },
       { trigger: '零成员验收空间 工作区操作', item: '移除工作区', title: '移除工作区' },
     ]) {
       await page.getByRole('button', { name: flow.trigger, exact: true }).click()
       if (flow.item)
         await page.getByRole('menuitem', { name: flow.item, exact: true }).click()
+      if (flow.mode)
+        await page.getByRole('dialog', { name: flow.title, exact: true }).getByRole('radio', { name: flow.mode, exact: true }).click()
       if (flow.title === '移除工作区' && !await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === '关闭'))
         throw new Error('移除确认的初始焦点不安全')
       await inspect(flow.title)

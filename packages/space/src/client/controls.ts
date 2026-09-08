@@ -110,6 +110,7 @@ interface MenuProps {
   badge?: IconName
 }
 interface ModalProps {
+  headingControl?: unknown
   workspace?: boolean
   compact?: boolean
   explicitSubmit?: boolean
@@ -467,6 +468,7 @@ export function createControls(React: ReactLike): Controls {
     compact,
     workspace,
     explicitSubmit,
+    headingControl,
   }: ModalProps): unknown {
     const dialog = React.useRef<HTMLDialogElement | null>(null)
     const ime = React.useMemo(createImeGuard, [])
@@ -521,6 +523,7 @@ export function createControls(React: ReactLike): Controls {
           'header',
           { className: 'dsh-space-dialog-header' },
           e('h2', null, title),
+          headingControl,
           e(IconButton, {
             icon: 'close',
             label: '关闭',

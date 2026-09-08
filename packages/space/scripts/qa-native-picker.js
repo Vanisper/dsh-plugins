@@ -8,8 +8,8 @@ async function _nativePickerRegression(page) {
   }
   const results = []
   for (const flow of [
-    { trigger: '添加工作区', item: '添加目录工作区', title: '添加目录工作区', picker: '选择目录' },
-    { trigger: '添加工作区', item: '创建空间', title: '创建空间', picker: '添加成员目录' },
+    { trigger: '创建工作区', title: '创建工作区', mode: '目录', picker: '选择目录' },
+    { trigger: '创建工作区', title: '创建工作区', picker: '添加成员目录' },
     { trigger: '零成员验收空间 工作区操作', item: '编辑工作区', title: '编辑工作区', picker: '添加成员目录' },
   ]) {
     for (const outcome of ['cancel', 'select', 'error']) {
@@ -35,8 +35,11 @@ async function _nativePickerRegression(page) {
       await page.route('**/api/host.pickDirectory', routeHandler)
       try {
         await page.getByRole('button', { name: flow.trigger, exact: true }).click()
-        await page.getByRole('menuitem', { name: flow.item, exact: true }).click()
+        if (flow.item)
+          await page.getByRole('menuitem', { name: flow.item, exact: true }).click()
         const dialog = page.getByRole('dialog', { name: flow.title, exact: true })
+        if (flow.mode)
+          await dialog.getByRole('radio', { name: flow.mode, exact: true }).click()
         await dialog.getByRole('button', { name: flow.picker, exact: true }).click()
         await requestReceived
         if (!await dialog.evaluate(element => element.open && element.getAttribute('closedby') === 'none'))
@@ -58,7 +61,7 @@ async function _nativePickerRegression(page) {
           throw new Error(`关闭保护未释放：${flow.title}`)
         if (outcome === 'select') {
           const accepted = flow.picker === '选择目录'
-            ? await dialog.getByRole('button', { name: '选择目录', exact: true }).textContent() === before.root
+            ? (await dialog.getByRole('button', { name: '选择目录', exact: true }).textContent()).includes(before.root)
             : await dialog.locator('[data-member-path]').count() === 1
           if (!accepted)
             throw new Error(`选择结果未进入草稿：${flow.title}`)

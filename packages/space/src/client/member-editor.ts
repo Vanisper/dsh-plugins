@@ -1,5 +1,7 @@
 import type { MemberItem, ReactLike } from './types.ts'
+import type { WorkingDirectory } from './workspace-fields.ts'
 import { createControls, tooltipProps } from './controls.ts'
+import { createWorkspaceFields } from './workspace-fields.ts'
 
 export interface MemberDraft {
   members: MemberItem[]
@@ -17,14 +19,19 @@ export function createMemberEditor(
 ) {
   const e = React.createElement
   const { Icon, IconButton } = createControls(React)
+  const { Directory } = createWorkspaceFields(React)
   return function MemberEditor({
     draft,
     setDraft,
     onPick,
+    directory,
+    space = true,
   }: {
     draft: MemberDraft
     setDraft: (next: MemberDraft) => void
     onPick: (accept: (path: string) => void) => void
+    directory?: WorkingDirectory
+    space?: boolean
   }): unknown {
     const [error, setError] = React.useState('')
     const list = React.useRef<HTMLDivElement | null>(null)
@@ -68,6 +75,10 @@ export function createMemberEditor(
       const next = value.trim()
       if (!next)
         return
+      if (!directory?.pending && directory?.path.replace(/[\\/]+$/, '') === next.replace(/[\\/]+$/, '')) {
+        setError('此目录已是工作目录')
+        return
+      }
       if (
         draft.members.some(
           member =>
@@ -100,12 +111,13 @@ export function createMemberEditor(
       e(
         'div',
         { className: 'dsh-space-inline-heading' },
-        e('h3', null, `成员目录 · ${draft.members.length}`),
+        e('h3', null, '文件夹'),
       ),
       e(
         'div',
         { ref: list, className: 'dsh-space-member-list' },
-        ...members.map(member =>
+        directory && !directory.pending ? e(Directory, { key: 'working-directory', ...directory }) : null,
+        ...(space ? members : []).map(member =>
           e(
             'div',
             {
@@ -183,12 +195,15 @@ export function createMemberEditor(
               : null),
           ),
         ),
-        e(
-          'button',
-          { key: 'add-member', type: 'button', className: `dsh-space-add-member${members.length ? '' : ' empty'}`, onClick: () => onPick(add) },
-          e(Icon, { name: 'folderPlus' }),
-          '添加成员目录',
-        ),
+        space
+          ? e(
+              'button',
+              { key: 'add-member', type: 'button', className: `dsh-space-add-member${members.length || (directory?.path && !directory.pending) ? '' : ' empty'}`, onClick: () => onPick(add) },
+              e(Icon, { name: 'folderPlus' }),
+              '添加成员目录',
+            )
+          : null,
+        space && directory?.pending ? e(Directory, { ...directory }) : null,
       ),
       error
         ? e(

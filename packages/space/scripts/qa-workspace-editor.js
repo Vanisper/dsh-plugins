@@ -40,6 +40,17 @@ async function _workspaceEditorRegression(page) {
       throw new Error('取消移除未恢复编辑草稿')
     }
     await page.keyboard.press('Escape')
+    for (const title of ['零成员验收空间', '验收项目']) {
+      await page.getByRole('button', { name: `${title} 工作区操作`, exact: true }).click()
+      await page.getByRole('menuitem', { name: '编辑工作区', exact: true }).click()
+      const editor = page.getByRole('dialog', { name: '编辑工作区', exact: true })
+      if (title === '验收项目')
+        await editor.getByRole('button', { name: '移除成员 后端', exact: true }).click()
+      if (await editor.getByRole('textbox', { name: '成员目录路径', exact: true }).count() || await editor.locator('.dsh-space-member-primary').count() || await editor.getByText('主要', { exact: true }).count())
+        throw new Error('零／单成员不应保留手工路径入口或主要标记')
+      await page.screenshot({ path: `output/playwright/workspace-member-${title === '验收项目' ? 'single' : 'empty'}.png` })
+      await page.keyboard.press('Escape')
+    }
     const after = await page.evaluate(async () => (await fetch('/api/dsh-space/registry')).json())
     if (JSON.stringify(before.items) !== JSON.stringify(after.items))
       throw new Error('仅操作草稿不应修改工作区')

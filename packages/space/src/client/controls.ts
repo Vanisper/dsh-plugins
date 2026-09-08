@@ -262,15 +262,17 @@ export function createControls(React: ReactLike): Controls {
       clearBackdrop()
       setOpen(false)
     }
-    const show = (): void => {
+    const show = (position?: { x: number, y: number }): void => {
       const menu = panel.current
       const button = trigger.current
       if (!menu || !button)
         return
-      if (open) {
+      if (open && !position) {
         close()
         return
       }
+      if (open)
+        menu.hidePopover()
       const rect = button.getBoundingClientRect()
       clearBackdrop()
       // 拦截层先进入顶层，菜单在它上方；关闭时不会把首次点击交给背景控件
@@ -291,22 +293,57 @@ export function createControls(React: ReactLike): Controls {
         withoutFocusHint(() => button.focus())
       }
       shield.addEventListener('click', dismiss)
-      shield.addEventListener('contextmenu', dismiss)
+      shield.addEventListener('contextmenu', (event) => {
+        stop(event)
+        close()
+        const target = document.elementFromPoint(event.clientX, event.clientY)
+        // 右键切换到指针下的菜单，左键仍只关闭拦截层，不执行背景动作
+        if (target?.closest('.dsh-space-root, .dsh-space-dialog')) {
+          const context = new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            clientX: event.clientX,
+            clientY: event.clientY,
+          })
+          if (!target.dispatchEvent(context))
+            return
+        }
+        withoutFocusHint(() => button.focus())
+      })
       ;(button.closest('dialog, [role="dialog"]') ?? document.body).append(shield)
       backdrop.current = shield
       shield.showPopover()
       hideHint()
-      window.dispatchEvent(new Event('dsh-space-menu-open'))
+      window.dispatchEvent(new CustomEvent('dsh-space-menu-open', { detail: menu }))
       menu.showPopover()
       const { height, width } = menu.getBoundingClientRect()
-      menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`
-      menu.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - height - 8))}px`
+      menu.style.left = `${Math.max(8, Math.min(position?.x ?? rect.left, window.innerWidth - width - 8))}px`
+      menu.style.top = `${Math.max(8, Math.min(position?.y ?? rect.bottom + 4, window.innerHeight - height - 8))}px`
       setOpen(true)
       withoutFocusHint(() => menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
     }
-    React.useEffect(() => () => {
-      clearBackdrop()
-      hideHint()
+    React.useEffect(() => {
+      const menu = panel.current!
+      const toggle = (event: Event): void => {
+        const active = (event as ToggleEvent).newState === 'open'
+        setOpen(active)
+        if (!active)
+          clearBackdrop()
+      }
+      const otherMenu = (event: Event): void => {
+        if ((event as CustomEvent).detail !== menu && backdrop.current)
+          close()
+      }
+      // 宿主 React 对 toggle 的支持不一致，直接订阅原生事件同步关闭状态
+      menu.addEventListener('toggle', toggle)
+      window.addEventListener('dsh-space-menu-open', otherMenu)
+      return () => {
+        menu.removeEventListener('toggle', toggle)
+        window.removeEventListener('dsh-space-menu-open', otherMenu)
+        clearBackdrop()
+        hideHint()
+      }
     }, [])
     React.useEffect(() => {
       if (!open)
@@ -320,6 +357,14 @@ export function createControls(React: ReactLike): Controls {
       {
         className: 'dsh-space-menu',
         onClick: (event: Event) => event.stopPropagation(),
+        onContextMenu: (event: MouseEvent) => {
+          event.preventDefault()
+          event.stopPropagation()
+          if (disabled || (event.target instanceof Node && panel.current?.contains(event.target)))
+            return
+          const rect = trigger.current!.getBoundingClientRect()
+          show(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : { x: rect.left, y: rect.bottom + 4 })
+        },
       },
       e(
         'button',
@@ -332,7 +377,7 @@ export function createControls(React: ReactLike): Controls {
           'aria-haspopup': 'menu',
           'aria-expanded': open,
           disabled,
-          'onClick': show,
+          'onClick': () => show(),
         },
         e(Icon, { name: icon }),
         badge ? e('span', { className: 'dsh-space-sort-badge' }, e(Icon, { name: badge, size: 9 })) : null,
@@ -341,15 +386,11 @@ export function createControls(React: ReactLike): Controls {
         'div',
         {
           'ref': panel,
-          'popover': 'auto',
+          // 右键 contextmenu 发生在 pointerup 前，auto 会把刚打开的菜单轻关闭
+          'popover': 'manual',
           'role': 'menu',
           'aria-label': label,
           'className': 'dsh-space-menu-panel',
-          'onToggle': (event: { newState: string }) => {
-            setOpen(event.newState === 'open')
-            if (event.newState !== 'open')
-              clearBackdrop()
-          },
           'onKeyDown': (event: KeyboardEvent) => {
             const buttons = Array.from(
               panel.current?.querySelectorAll<HTMLButtonElement>(
@@ -374,6 +415,10 @@ export function createControls(React: ReactLike): Controls {
               buttons[next]?.focus()
             }
             if (event.key === 'Escape' || event.key === 'Tab') {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                event.stopPropagation()
+              }
               close()
               withoutFocusHint(() => trigger.current?.focus())
             }

@@ -266,6 +266,11 @@ async function input(label: string, text: string): Promise<void> {
   })
 }
 
+async function addMember(workspaces: WorkspaceService, path = '/c'): Promise<void> {
+  vi.mocked(workspaces.pickDirectory).mockResolvedValueOnce(path)
+  await click('添加成员目录')
+}
+
 async function registry(value: RegistryPayload | undefined): Promise<void> {
   fixture.registry = value
   await act(async () => fixture.receive?.(value, value ? undefined : 'offline'))
@@ -1135,7 +1140,7 @@ describe('侧栏交互', () => {
     target.getBoundingClientRect = () => ({ top: 100, height: 200 }) as DOMRect
     await act(async () => source.dispatchEvent(new Event('dragstart', { bubbles: true })))
     await act(async () => target.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 160 })))
-    expect(target.classList.contains('drop-before')).toBe(true)
+    expect(target.classList.contains('drop-before')).toBe(false)
     await act(async () => target.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 280 })))
     expect(target.classList.contains('drop-after')).toBe(true)
     await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
@@ -1166,6 +1171,37 @@ describe('侧栏交互', () => {
     await act(async () => source.dispatchEvent(new Event('dragend', { bubbles: true })))
     expect(target.querySelector('.dsh-space-group-placeholder')).toBeNull()
     expect(createLayoutStore().getSnapshot().assignments).toEqual({})
+    expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
+  })
+
+  it('会话相邻原位不显示落点，仅真实调序时显示插入线', async () => {
+    await mountOrdering()
+    const source = document.querySelector('[data-session-id="b"] .dsh-space-session-main')!
+    const target = document.querySelector('[data-session-id="c"]')!
+    target.getBoundingClientRect = () => ({ top: 100, height: 30 }) as DOMRect
+    await act(async () => source.dispatchEvent(new Event('dragstart', { bubbles: true })))
+    await act(async () => target.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 101 })))
+    expect(document.querySelector('.drop-before,.drop-after')).toBeNull()
+    await act(async () => target.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 128 })))
+    expect(target.classList.contains('drop-after')).toBe(true)
+    await act(async () => source.dispatchEvent(new Event('dragend', { bubbles: true })))
+  })
+
+  it('同组标题与空白区不作为置顶或置底落点', async () => {
+    const store = createLayoutStore()
+    store.saveGroup({ id: 'g', title: '计划', color: 'gray', collapsed: false }, true)
+    store.assignGroup('b', 'g')
+    store.assignGroup('c', 'g')
+    store.setView('groups')
+    const { workspaces } = await mountOrdering()
+    const before = createLayoutStore().getSnapshot()
+    const source = document.querySelector('[data-session-id="b"] .dsh-space-session-main')!
+    const group = document.querySelector('[data-display-group="g"]')!
+    await act(async () => source.dispatchEvent(new Event('dragstart', { bubbles: true })))
+    await act(async () => group.dispatchEvent(new MouseEvent('dragover', { bubbles: true, cancelable: true })))
+    expect(document.querySelector('.drop-before,.drop-after,.drop-assign')).toBeNull()
+    await act(async () => group.dispatchEvent(new MouseEvent('drop', { bubbles: true, cancelable: true })))
+    expect(createLayoutStore().getSnapshot()).toEqual(before)
     expect(workspaces.insertSessionBefore).not.toHaveBeenCalled()
   })
 
@@ -1500,6 +1536,8 @@ describe('侧栏交互', () => {
     await act(async () => document.querySelector('.dsh-space-head')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))
     expect(document.querySelector('.dsh-space-details')).toBeNull()
     expect(button('演示空间 工作区操作').getAttribute('aria-expanded')).toBe('true')
+    await act(async () => document.querySelector('.dsh-space-head')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))
+    expect(button('演示空间 工作区操作').getAttribute('aria-expanded')).toBe('true')
     await hoverInfo()
     await click('已有会话')
     expect(document.querySelector('.dsh-space-details')).toBeNull()
@@ -1714,10 +1752,9 @@ describe('侧栏交互', () => {
   })
 
   it('空间开关保留草稿，关闭后 Enter 不隐式降级，保存带上原版本', async () => {
-    await mount()
+    const { workspaces } = await mount()
     await click('编辑工作区')
-    await input('成员目录路径', '/c')
-    await click('添加路径')
+    await addMember(workspaces)
     const toggle = () => act(async () => document.querySelector<HTMLInputElement>('[aria-label="作为空间"]')!.click())
     await toggle()
     expect(document.querySelector('.dsh-space-change-warning')?.textContent).toContain('2 项成员配置')
@@ -1739,11 +1776,10 @@ describe('侧栏交互', () => {
   })
 
   it('取消移除确认返回完整编辑草稿', async () => {
-    await mount()
+    const { workspaces } = await mount()
     await click('编辑工作区')
     await input('工作区名称', '待保存')
-    await input('成员目录路径', '/c')
-    await click('添加路径')
+    await addMember(workspaces)
     await click('移除工作区')
     expect(document.querySelector('dialog.compact')).not.toBeNull()
     await click('取消')
@@ -1757,8 +1793,10 @@ describe('侧栏交互', () => {
     const { item, workspaces, beginDraft } = await mount()
     vi.mocked(workspaces.create).mockResolvedValue(item)
     await click('添加目录工作区')
+    expect(document.querySelector('[aria-label="目录完整路径"]')).toBeNull()
     await click('选择目录')
     expect(document.querySelector<HTMLInputElement>('[aria-label="工作区名称"]')?.value).toBe('picked')
+    expect(button('选择目录').textContent).toBe('/picked')
     await click('添加')
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('此目录已登记')
     expect(beginDraft).not.toHaveBeenCalled()
@@ -1820,8 +1858,7 @@ describe('侧栏交互', () => {
     await click('编辑工作区')
     expect(document.querySelector('.dsh-space-member-list')!.closest('[hidden]')).not.toBeNull()
     await act(async () => document.querySelector<HTMLInputElement>('.dsh-space-enhance input')!.click())
-    await input('成员目录路径', '/c')
-    await click('添加路径')
+    await addMember(workspaces)
     expect(operation).not.toHaveBeenCalled()
     await click('取消')
     expect(workspaces.rename).not.toHaveBeenCalled()
@@ -1833,8 +1870,7 @@ describe('侧栏交互', () => {
     const { workspaces } = await mount()
     await click('编辑工作区')
     await input('工作区名称', '修改名称')
-    await input('成员目录路径', '/c')
-    await click('添加路径')
+    await addMember(workspaces)
     vi.mocked(workspaces.rename).mockRejectedValueOnce(new Error('离线'))
     await click('保存')
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('已完成的修改已保留')
@@ -1858,40 +1894,35 @@ describe('侧栏交互', () => {
     expect(workspaces.rename).not.toHaveBeenCalled()
   })
 
-  it('显式重新载入丢弃名称、成员和未添加的路径草稿', async () => {
-    await mount()
+  it('显式重新载入丢弃未保存的名称和成员草稿', async () => {
+    const { workspaces } = await mount()
     await click('编辑工作区')
     await input('工作区名称', '未保存名称')
-    await input('成员目录路径', '/c')
-    await click('添加路径')
-    await input('成员目录路径', '/not-added')
+    await addMember(workspaces)
     operation.mockRejectedValueOnce(new Error('拒绝保存'))
     await click('保存')
     await click('放弃未保存修改并重新载入')
     expect(document.querySelector<HTMLInputElement>('[aria-label="工作区名称"]')?.value).toBe('演示空间')
-    expect(document.querySelector<HTMLInputElement>('[aria-label="成员目录路径"]')?.value).toBe('')
+    expect(document.querySelector('[aria-label="成员目录路径"]')).toBeNull()
     expect(document.querySelectorAll('[data-member-path]')).toHaveLength(2)
     expect(document.querySelector('[role="alert"]')).toBeNull()
   })
 
-  it('路径输入的原生组字 Enter 不添加成员或提交整个表单', async () => {
-    await mount()
+  it('成员只通过系统选择添加，取消选择不改变草稿', async () => {
+    const { workspaces } = await mount()
     await click('编辑工作区')
-    await input('成员目录路径', '/c')
-    await act(async () => {
-      const event = new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })
-      document.querySelector('[aria-label="成员目录路径"]')!.dispatchEvent(event)
-      expect(event.defaultPrevented).toBe(true)
-    })
+    expect(document.querySelector('[aria-label="成员目录路径"]')).toBeNull()
+    expect(document.querySelector('dialog')?.textContent).not.toContain('输入目录路径')
+    vi.mocked(workspaces.pickDirectory).mockResolvedValueOnce(null)
+    await click('添加成员目录')
     expect(document.querySelectorAll('[data-member-path]')).toHaveLength(2)
     expect(operation).not.toHaveBeenCalled()
   })
 
   it('整份草稿一次保存，携带原版本，失败保留输入', async () => {
-    await mount()
+    const { workspaces } = await mount()
     await click('编辑工作区')
-    await input('成员目录路径', '/c')
-    await click('添加路径')
+    await addMember(workspaces)
     operation.mockRejectedValueOnce(new Error('成员已在其他位置修改'))
     await click('保存')
     expect(operation).toHaveBeenCalledWith(
@@ -1908,10 +1939,9 @@ describe('侧栏交互', () => {
   })
 
   it('快速重复保存只产生一个请求，提交期间关闭无效', async () => {
-    await mount()
+    const { workspaces } = await mount()
     await click('编辑工作区')
-    await input('成员目录路径', '/c')
-    await click('添加路径')
+    await addMember(workspaces)
     let finish!: (value: Record<string, unknown>) => void
     operation.mockImplementationOnce(
       () =>
@@ -2198,13 +2228,12 @@ describe('侧栏交互', () => {
 
 it('成功反馈使用宿主浮层，相同提示重新计时且不挤占列表或抢焦点', async () => {
   vi.useFakeTimers()
-  const { setWide } = await mount()
+  const { setWide, workspaces } = await mount()
   vi.spyOn(document.querySelector('.dsh-space-root')!, 'getBoundingClientRect').mockReturnValue({ width: 268, left: 12, bottom: 800 } as DOMRect)
   vi.spyOn(document.querySelector('.dsh-space-toolbar-shell')!, 'getBoundingClientRect').mockReturnValue({ width: 252, left: 14 } as DOMRect)
   const save = async (path: string): Promise<void> => {
     await click('编辑工作区')
-    await input('成员目录路径', path)
-    await click('添加路径')
+    await addMember(workspaces, path)
     await click('保存')
   }
   await save('/c')

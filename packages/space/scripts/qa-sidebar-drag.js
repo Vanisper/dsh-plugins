@@ -51,18 +51,27 @@ async function _sidebarDragRegression(page) {
     const source = page.getByRole('button', { name: projects[0].title, exact: true }).first()
     const target = page.getByRole('button', { name: projects[1].title, exact: true }).first().locator('xpath=ancestor::section[1]')
     await start(source, target)
-    await page.locator('.dsh-space-group.drop-before').waitFor()
+    if (await page.locator('.drop-before,.drop-after').count())
+      throw new Error('相邻原位不应显示引导线')
+    await page.locator('.dsh-space-drag-preview').waitFor()
     await move(target, 0.85)
     await page.locator('.dsh-space-group.drop-after').waitFor()
     await page.screenshot({ path: 'output/playwright/sidebar-drag-project-after.png' })
     await cancel()
-    if (await page.locator('.drop-before,.drop-after,.drop-assign').count())
+    if (await page.locator('.drop-before,.drop-after,.drop-assign,.dsh-space-drag-preview').count())
       throw new Error('取消后残留拖动落点')
 
     const groups = [{ id: 'qa-a', title: '计划', color: 'blue', collapsed: false }, { id: 'qa-b', title: '待整理', color: 'green', collapsed: true }]
     await fixture({ view: 'groups', groups, assignments: { [sessionId]: 'qa-a' } })
     const row = page.locator(`[data-session-id="${sessionId}"] .dsh-space-session-main`)
     const group = page.locator('[data-display-group="qa-b"]')
+    const sameGroup = page.locator('[data-display-group="qa-a"]')
+    await start(row, sameGroup.locator('.dsh-space-section-head'), 0.5)
+    if (await page.locator('.drop-before,.drop-after,.drop-assign').count())
+      throw new Error('同组标题不应提供首尾排序落点')
+    await page.mouse.up()
+    if ((await layout()).sorts['group:qa-a'])
+      throw new Error('同组标题放下不应改变排序偏好')
     await start(row, group, 0.5)
     await page.locator('[data-display-group="qa-b"].drop-assign').waitFor()
     await page.getByRole('button', { name: '待整理 新建会话占位', exact: true }).waitFor()
@@ -101,7 +110,7 @@ async function _sidebarDragRegression(page) {
     const after = await page.evaluate(async () => (await fetch('/api/dsh-space/registry')).json())
     if (JSON.stringify(before.items) !== JSON.stringify(after.items))
       throw new Error('展示拖动或取消不应修改核心工作区与会话')
-    return { projectEdges: true, previewCanceled: true, assigned: true, groupReordered: true, mixedPins: true, scrolled, coreUnchanged: true }
+    return { noOpHidden: true, sameGroupHeaderIgnored: true, projectEdges: true, previewCanceled: true, assigned: true, groupReordered: true, mixedPins: true, scrolled, coreUnchanged: true }
   }
   finally {
     await cancel()

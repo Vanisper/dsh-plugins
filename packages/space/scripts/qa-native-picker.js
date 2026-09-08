@@ -58,7 +58,7 @@ async function _nativePickerRegression(page) {
           throw new Error(`关闭保护未释放：${flow.title}`)
         if (outcome === 'select') {
           const accepted = flow.picker === '选择目录'
-            ? await dialog.getByRole('textbox', { name: '目录完整路径', exact: true }).inputValue() === before.root
+            ? await dialog.getByRole('button', { name: '选择目录', exact: true }).textContent() === before.root
             : await dialog.locator('[data-member-path]').count() === 1
           if (!accepted)
             throw new Error(`选择结果未进入草稿：${flow.title}`)

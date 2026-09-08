@@ -38,7 +38,7 @@ import { observeRegistry } from './registry.ts'
 import { createRenameDialog } from './rename-dialog.ts'
 import { installScrollFade } from './scroll-fade.ts'
 import { moveBefore, sessionOrderMoves } from './session-order.ts'
-import { createSidebarDrag, dropAfter } from './sidebar-drag.ts'
+import { createSidebarDrag, dropAfter, orderedDrop } from './sidebar-drag.ts'
 import { archivedEntries, projectGroups } from './views.ts'
 import { waitFor } from './wait.ts'
 import { createWorkspaceEdit } from './workspace-edit.ts'
@@ -676,6 +676,13 @@ export function createSidebar(
         return
       layoutStore.movePin(pin, before, activeView, pins)
     }
+    const overPin = (event: DragEvent, pin: Pin): void => {
+      const source = drag.getSnapshot().source
+      if (busy || source?.kind !== 'pin')
+        return
+      const pins: Pin[] = activeView === 'groups' ? groups.pinned.map(entry => ({ kind: 'session', id: entry.session.id })) : sections.pinned.map(entryPin)
+      drag.over(orderedDrop('pin', pinKey(pin), pinKey(source.pin), pins.map(pinKey), event), event)
+    }
     const dropPin = (event: DragEvent, target: Pin): void => {
       const source = drag.getSnapshot().source
       if (busy || source?.kind !== 'pin')
@@ -894,16 +901,26 @@ export function createSidebar(
     ]
     const openContextMenu = (event: {
       preventDefault: () => void
+      stopPropagation: () => void
+      clientX: number
+      clientY: number
       currentTarget: HTMLElement
     }): void => {
       event.preventDefault()
+      event.stopPropagation()
       if (busy)
         return
       stopInfoTimer()
       setInfo(null)
       event.currentTarget
         .querySelector<HTMLButtonElement>('.dsh-space-menu-trigger')
-        ?.click()
+        ?.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: event.clientX,
+          clientY: event.clientY,
+        }))
     }
     const dismissInfoOnAction = (event: { target: EventTarget }): void => {
       if (!busy && event.target instanceof Element && event.target.closest('.dsh-space-menu-trigger,.dsh-space-session-main,.dsh-space-heading')) {
@@ -939,10 +956,16 @@ export function createSidebar(
           'key': session.id,
           'onContextMenu': openContextMenu,
           'onDragOver': (event: DragEvent) => {
-            if (acceptsSession())
-              drag.over({ kind: 'session', id: session.id, after: dropAfter(event) }, event)
-            else if (canDrag && isPinned(pin) && drag.getSnapshot().source?.kind === 'pin')
-              drag.over({ kind: 'pin', id: pinKey(pin), after: dropAfter(event) }, event)
+            if (acceptsSession()) {
+              const source = drag.getSnapshot().source as { id: string }
+              const peers = activeView === 'groups'
+                ? (layout.assignments[session.id] ? groups.groups.find(row => row.group.id === layout.assignments[session.id])?.entries : groups.ungrouped)?.map(row => row.session.id) ?? []
+                : sessionPeers(item)
+              drag.over(orderedDrop('session', session.id, source.id, peers, event), event)
+            }
+            else if (canDrag && isPinned(pin) && drag.getSnapshot().source?.kind === 'pin') {
+              overPin(event, pin)
+            }
           },
           'onDragLeave': drag.leave,
           'onDrop': (event: DragEvent) => {
@@ -1055,8 +1078,9 @@ export function createSidebar(
           className: `dsh-space-group${dropClass('workspace', item.workspaceId)}`,
           key: item.workspaceId,
           onDragOver: (event: DragEvent) => {
-            if (!busy && drag.getSnapshot().source?.kind === 'workspace' && !isPinned({ kind: 'workspace', id: item.workspaceId }))
-              drag.over({ kind: 'workspace', id: item.workspaceId, after: dropAfter(event) }, event)
+            const source = drag.getSnapshot().source
+            if (!busy && source?.kind === 'workspace' && !isPinned({ kind: 'workspace', id: item.workspaceId }))
+              drag.over(orderedDrop('workspace', item.workspaceId, source.id, workspacePeers(item).map(row => row.workspaceId), event), event)
           },
           onDragLeave: drag.leave,
           onDrop: (event: DragEvent) => {
@@ -1152,8 +1176,9 @@ export function createSidebar(
         'aria-label': sectionLabels[id],
         'data-section': id,
         'onDragOver': (event: DragEvent) => {
-          if (!busy && drag.getSnapshot().source?.kind === 'section')
-            drag.over({ kind: 'section', id, after: dropAfter(event) }, event)
+          const source = drag.getSnapshot().source
+          if (!busy && source?.kind === 'section')
+            drag.over(orderedDrop('section', id, source.id, visibleSections, event), event)
         },
         'onDragLeave': drag.leave,
         'onDrop': (event: DragEvent) => {
@@ -1187,7 +1212,7 @@ export function createSidebar(
             className: id === 'pinned' && entry.kind === 'workspace' ? `dsh-space-pin-block${dropClass('pin', pinKey(entryPin(entry)))}` : undefined,
             onDragOver: (event: DragEvent) => {
               if (!busy && id === 'pinned' && drag.getSnapshot().source?.kind === 'pin')
-                drag.over({ kind: 'pin', id: pinKey(entryPin(entry)), after: dropAfter(event) }, event)
+                overPin(event, entryPin(entry))
             },
             onDragLeave: drag.leave,
             onDrop: (event: DragEvent) => {
@@ -1234,10 +1259,10 @@ export function createSidebar(
           const source = drag.getSnapshot().source
           if (source?.kind === 'session') {
             const folded = groupId ? layout.groups.find(group => group.id === groupId)?.collapsed : layout.foldedLists.includes('groups:sessions')
-            drag.over({ kind: 'assign', id: groupId ?? '', after: layout.assignments[source.id] === groupId }, event, folded ? groupKey(groupId) : undefined)
+            drag.over(layout.assignments[source.id] === groupId ? undefined : { kind: 'assign', id: groupId ?? '', after: false }, event, folded ? groupKey(groupId) : undefined)
           }
           else if (source?.kind === 'group' && groupId) {
-            drag.over({ kind: 'group', id: groupId, after: dropAfter(event) }, event)
+            drag.over(orderedDrop('group', groupId, source.id, layout.groups.map(group => group.id), event), event)
           }
         },
         onDragLeave: drag.leave,
@@ -1248,7 +1273,8 @@ export function createSidebar(
           if (source?.kind === 'session') {
             event.preventDefault()
             event.stopPropagation()
-            moveGroupedSession(source.id, undefined, groupId)
+            if (layout.assignments[source.id] !== groupId)
+              moveGroupedSession(source.id, undefined, groupId)
           }
           else if (groupId && source?.kind === 'group') {
             event.preventDefault()
@@ -1451,7 +1477,7 @@ export function createSidebar(
               ),
           },
           e(WorkspaceFields.Name, { value: text, space: enhance, onChange: setText }),
-          e(WorkspaceFields.Path, { value: directoryPath, onChange: createdId.current ? undefined : changePath, onPick: () => onPick(changePath) }),
+          e(WorkspaceFields.Path, { value: directoryPath, onPick: createdId.current ? undefined : () => onPick(changePath) }),
           e(WorkspaceFields.SpaceToggle, { value: enhance, onChange: setEnhance }),
           e('div', { hidden: !enhance }, e(MemberEditor, { draft: members, setDraft: setMembers, onPick })),
         )

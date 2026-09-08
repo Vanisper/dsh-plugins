@@ -1,6 +1,5 @@
 import type { MemberItem, ReactLike } from './types.ts'
 import { createControls, tooltipProps } from './controls.ts'
-import { createImeGuard } from './ime.ts'
 
 export interface MemberDraft {
   members: MemberItem[]
@@ -27,9 +26,7 @@ export function createMemberEditor(
     setDraft: (next: MemberDraft) => void
     onPick: (accept: (path: string) => void) => void
   }): unknown {
-    const [path, setPath] = React.useState('')
     const [error, setError] = React.useState('')
-    const ime = React.useMemo(createImeGuard, [])
     const list = React.useRef<HTMLDivElement | null>(null)
     const positions = React.useRef(new Map<string, number>())
     const linkNames = React.useRef(new Map(draft.members.map(member => [member.path, member.linkName])))
@@ -88,7 +85,6 @@ export function createMemberEditor(
         members: [...draft.members, { path: next, mode: 'reference' }],
         primary: draft.primary ?? next,
       })
-      setPath('')
       setError('')
     }
     const patch = (member: MemberItem, values: Partial<MemberItem>): void =>
@@ -128,7 +124,7 @@ export function createMemberEditor(
                   'strong',
                   { title: memberLabel(member) },
                   memberLabel(member),
-                  member.path === draft.primary
+                  members.length > 1 && member.path === draft.primary
                     ? e('span', { className: 'dsh-space-badge' }, '主要')
                     : null,
                 ),
@@ -194,32 +190,6 @@ export function createMemberEditor(
           '添加成员目录',
         ),
       ),
-      e('details', { className: 'dsh-space-member-manual' }, e('summary', null, '输入目录路径'), e(
-        'div',
-        { className: 'dsh-space-path-field' },
-        e('input', {
-          'aria-label': '成员目录路径',
-          'value': path,
-          'placeholder': '目录完整路径',
-          'onCompositionStart': ime.start,
-          'onCompositionEnd': ime.end,
-          'onChange': (event: { target: HTMLInputElement }) =>
-            setPath(event.target.value),
-          'onKeyDown': (event: { key: string, nativeEvent: KeyboardEvent, preventDefault: () => void }) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              if (!ime.active(event.nativeEvent))
-                add(path)
-            }
-          },
-        }),
-        e(IconButton, {
-          icon: 'plus',
-          label: '添加路径',
-          disabled: !path.trim(),
-          onClick: () => add(path),
-        }),
-      )),
       error
         ? e(
             'div',

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { createSidebarDrag, dropAfter } from './sidebar-drag.ts'
+import { createSidebarDrag, dropAfter, orderedDrop } from './sidebar-drag.ts'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -48,6 +48,42 @@ it('折叠预览延迟展开，离开取消计时，结束恢复所有预览', a
   expect(h.drag.getSnapshot().previews).toEqual(['group:g'])
   h.drag.reset()
   expect(h.drag.getSnapshot()).toEqual({ previews: [] })
+})
+
+it.each(['workspace', 'session', 'section', 'group', 'pin'] as const)('%s 原位和相邻无变化落点不显示引导线', (kind) => {
+  const h = harness()
+  h.list.getBoundingClientRect = () => ({ top: 100, height: 40 }) as DOMRect
+  const top = h.event(h.list, 101)
+  const bottom = h.event(h.list, 139)
+  expect(orderedDrop(kind, 'b', 'a', ['a', 'b', 'c'], top)).toBeUndefined()
+  expect(orderedDrop(kind, 'a', 'b', ['a', 'b', 'c'], bottom)).toBeUndefined()
+  expect(orderedDrop(kind, 'b', 'b', ['a', 'b', 'c'], bottom)).toBeUndefined()
+  expect(orderedDrop(kind, 'b', 'a', ['a', 'b', 'c'], bottom)).toEqual({ kind, id: 'b', after: true })
+  expect(orderedDrop(kind, 'b', 'foreign', ['a', 'b', 'c'], top)).toEqual({ kind, id: 'b', after: false })
+})
+
+it('拖动预览只带图标和标题，跟随指针且在取消时移除', () => {
+  const h = harness()
+  const title = document.createElement('span')
+  title.className = 'dsh-space-session-title'
+  title.textContent = '已有会话'
+  h.source.append(title, '+3')
+  const dispose = h.drag.install()
+  const setDragImage = vi.fn()
+  h.drag.start({ kind: 'session', id: 's' }, { ...h.event(), dataTransfer: { setData: vi.fn(), setDragImage } } as unknown as DragEvent)
+  const preview = document.querySelector<HTMLElement>('.dsh-space-drag-preview')!
+  expect(preview.textContent).toBe('已有会话')
+  expect(preview.querySelector('svg')).not.toBeNull()
+  expect(preview.getAttribute('aria-hidden')).toBe('true')
+  expect(setDragImage).toHaveBeenCalledOnce()
+  document.dispatchEvent(new MouseEvent('dragover', { clientX: 80, clientY: 160 }))
+  expect(preview.style.left).toBe('92px')
+  expect(preview.style.top).toBe('172px')
+  h.drag.over({ kind: 'session', id: 'b', after: false }, h.event())
+  h.drag.over(undefined, h.event())
+  expect(h.drag.getSnapshot().target).toBeUndefined()
+  dispose()
+  expect(document.querySelector('.dsh-space-drag-preview')).toBeNull()
 })
 
 it.each(['escape', 'blur', 'outside', 'removed', 'dispose'] as const)('%s 清理源、落点和拖动期监听', (action) => {

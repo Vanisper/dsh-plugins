@@ -17,6 +17,8 @@ export interface SpaceData {
 /** 一个对话描述；目录和标题由核心工作区行提供 */
 export interface ChatData {
   workspaceId: string
+  /** 同一次客户端创建请求的去重标识，不参与会话归属 */
+  creationId?: string
 }
 
 /** dsh-space 设置分节的完整形状 */
@@ -36,6 +38,7 @@ export interface WorkspaceView {
 
 /** 核心行存在时的多项目投影 */
 export interface SpaceView extends SpaceData, Pick<WorkspaceView, 'path' | 'title' | 'sessionIds'> {
+  revision: string
   path: string
   title: string
   status: 'ready'

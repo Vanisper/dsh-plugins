@@ -1,7 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { MemberInput } from '../business/member-draft.ts'
 import type { SpaceOperation, SpaceOperations } from '../business/operations.ts'
 import { Buffer } from 'node:buffer'
+import { readDraftOptions } from './draft-options.ts'
 
 interface Route {
   kind: 'exact' | 'prefix'
@@ -14,7 +16,21 @@ interface WebServerLike {
 }
 
 const MAX_BODY = 256 * 1024
-const operationKeys = new Set(['op', 'name', 'folder', 'mode', 'linkName', 'title', 'description', 'workspace', 'target', 'value'])
+const operationKeys = new Set(['op', 'name', 'folder', 'mode', 'linkName', 'title', 'description', 'workspace', 'target', 'value', 'members', 'primary', 'expectedRevision', 'creationId'])
+const memberKeys = new Set(['path', 'mode', 'linkName', 'title', 'description'])
+
+function parseMembers(value: unknown): MemberInput[] {
+  if (!Array.isArray(value) || value.length > 100)
+    throw new Error('members 必须是最多 100 项的数组')
+  return value.map((input) => {
+    const member = object(input)
+    for (const key of Object.keys(member)) {
+      if (!memberKeys.has(key))
+        throw new Error(`成员包含未知字段：${key}`)
+    }
+    return { path: requiredString(member, 'path'), mode: mode(member.mode), linkName: optionalString(member.linkName, 'linkName'), title: optionalString(member.title, 'title'), description: optionalString(member.description, 'description') }
+  })
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -53,16 +69,17 @@ export function parseOperation(value: unknown): SpaceOperation {
   }
   const op = requiredString(body, 'op')
   switch (op) {
-    case 'create-space': return { op, name: requiredString(body, 'name'), folder: optionalString(body.folder, 'folder'), mode: mode(body.mode), linkName: optionalString(body.linkName, 'linkName'), title: optionalString(body.title, 'title'), description: optionalString(body.description, 'description') }
-    case 'enhance-space': return { op, workspace: requiredString(body, 'workspace') }
+    case 'create-space': return { op, name: requiredString(body, 'name'), folder: optionalString(body.folder, 'folder'), mode: mode(body.mode), linkName: optionalString(body.linkName, 'linkName'), title: optionalString(body.title, 'title'), description: optionalString(body.description, 'description'), ...(body.members !== undefined ? { members: parseMembers(body.members) } : {}), ...(body.primary !== undefined ? { primary: optionalString(body.primary, 'primary') } : {}) }
+    case 'save-members': return { op, workspace: requiredString(body, 'workspace'), members: parseMembers(body.members), primary: optionalString(body.primary, 'primary'), expectedRevision: requiredString(body, 'expectedRevision') }
+    case 'enhance-space': return { op, workspace: requiredString(body, 'workspace'), ...(body.members !== undefined ? { members: parseMembers(body.members) } : {}), ...(body.primary !== undefined ? { primary: optionalString(body.primary, 'primary') } : {}) }
     case 'attach': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), mode: mode(body.mode), linkName: optionalString(body.linkName, 'linkName'), title: optionalString(body.title, 'title'), description: optionalString(body.description, 'description') }
     case 'detach': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target') }
     case 'primary': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target') }
     case 'title': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), value: optionalString(body.value, 'value') ?? '' }
     case 'description': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), value: optionalString(body.value, 'value') ?? '' }
     case 'update-member': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), title: optionalString(body.title, 'title') ?? '', description: optionalString(body.description, 'description') ?? '' }
-    case 'create-chat': return { op, name: optionalString(body.name, 'name') }
-    case 'drop-space': return { op, workspace: requiredString(body, 'workspace') }
+    case 'create-chat': return { op, name: optionalString(body.name, 'name'), creationId: optionalString(body.creationId, 'creationId') }
+    case 'drop-space': return { op, workspace: requiredString(body, 'workspace'), ...(body.expectedRevision !== undefined ? { expectedRevision: requiredString(body, 'expectedRevision') } : {}) }
     case 'drop-chat': return { op, workspace: requiredString(body, 'workspace') }
     default: throw new Error(`未知操作：${op}`)
   }
@@ -113,6 +130,16 @@ export function registerHttpApi(ctx: Context, operations: SpaceOperations): () =
       return json(res, 405, { ok: false, error: '只支持 GET' })
     json(res, 200, { ok: true, ...operations.snapshot() })
   } })
+  const draftOptions = server.register({ kind: 'exact', path: '/api/dsh-space/draft-options', handler: async (req, res) => {
+    if (req.method !== 'GET')
+      return json(res, 405, { ok: false, error: '只支持 GET' })
+    try {
+      json(res, 200, { ok: true, ...await readDraftOptions(ctx) })
+    }
+    catch {
+      json(res, 503, { ok: false, error: '新会话选项暂不可用，请重试' })
+    }
+  } })
   const ops = server.register({ kind: 'exact', path: '/api/dsh-space/ops', handler: async (req, res) => {
     if (req.method !== 'POST') {
       json(res, 405, { ok: false, error: '只支持 POST' })
@@ -128,6 +155,7 @@ export function registerHttpApi(ctx: Context, operations: SpaceOperations): () =
   } })
   return () => {
     registry()
+    draftOptions()
     ops()
   }
 }

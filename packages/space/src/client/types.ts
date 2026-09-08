@@ -7,6 +7,7 @@ export interface MemberItem {
 }
 
 export interface RegistryItem {
+  creationId?: string
   kind: 'plain' | 'space' | 'chat'
   workspaceId: string
   path: string
@@ -14,6 +15,7 @@ export interface RegistryItem {
   sessionIds: string[]
   members?: MemberItem[]
   primary?: string
+  revision?: string
 }
 
 export interface RegistryPayload {
@@ -90,11 +92,14 @@ export interface SessionService {
   search: (query: string, signal: AbortSignal) => Promise<RpcResult<{ items: SessionSearchResult[], hasMore: boolean }>>
   fork: (input: { sessionId: string, increaseTitle?: boolean }) => Promise<string>
   binding: (id: string) => SessionBinding | undefined
+  scope: (id: string) => unknown
 }
 
 export interface WorkspaceService {
   list: ObservableSnapshot<WorkspaceSnapshot>
+  refresh: () => Promise<void>
   startSession: (workspaceId?: string) => void
+  connectWorkspace: (workspaceId: string) => Promise<string>
   create: (input: { path: string }) => Promise<CoreWorkspace>
   pickDirectory: () => Promise<string | null>
   openPath: (path: string) => Promise<void>
@@ -111,8 +116,21 @@ export interface SlotProps {
 }
 
 export interface SlotsService {
-  inject: (key: string, factory: () => unknown) => unknown
-  register: (definition: Record<string, unknown>, component: (props: SlotProps) => unknown) => unknown
+  inject: (key: string, factory: () => (() => void)) => () => void
+  register: <P>(definition: Record<string, unknown>, component: (props: P) => unknown) => () => void
+}
+
+/** 宿主会话输入的公开交接面，不调用私有附件或输入实现 */
+export interface ConversationService {
+  input: {
+    for: (scope: unknown) => {
+      state: ObservableSnapshot<{ draft: string, imageIds: readonly string[], phase: string }>
+      setDraft: (text: string) => void
+      submit: () => void
+      notify: (level: 'info' | 'error', text: string) => void
+    }
+  }
+  blocks: { storeFor: (id: string) => ObservableSnapshot<{ reason: string } | undefined> }
 }
 
 export interface ClientServices {
@@ -128,4 +146,12 @@ export interface ReactLike {
   useState: <T>(value: T | (() => T)) => [T, (next: T | ((old: T) => T)) => void]
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => void
   useSyncExternalStore: <T>(subscribe: (fn: () => void) => () => void, snapshot: () => T) => T
+}
+
+/** 宿主公开组件，保持状态与模态操作的原生外观 */
+export interface SidebarPrimitives {
+  Toast: (props: { text: string, icon?: unknown, anchor?: HTMLElement | null, onDone: () => void }) => unknown
+  StateDot: (props: { state: 'ongoing' | 'warning' | 'done', size?: number }) => unknown
+  Modal: (props: { open: boolean, title: string, closeLabel: string, onClose: () => void, footer?: unknown, children?: unknown }) => unknown
+  Button: (props: { variant: 'outline' | 'primary', disabled?: boolean, onClick: () => void, children?: unknown }) => unknown
 }

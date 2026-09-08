@@ -25,6 +25,7 @@
   "types": "lib/index.d.ts",
   "files": [
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
     "cordis.patch.yml",
     "lib",
     "lib/client.js"
@@ -44,9 +45,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsdown",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "native-input": "node scripts/native-input.mjs",
+    "build": "pnpm native-input && tsdown",
+    "test": "pnpm native-input && vitest run",
+    "typecheck": "pnpm native-input && tsc --noEmit"
   },
   "dependencies": {
     "@deepseek-ai/dsh-settings": "catalog:dsh",
@@ -55,11 +57,22 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "catalog:dsh",
+    "@deepseek-ai/dsh-client-ui-commands": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-input-trigger": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-permission-presets": "0.1.1-rc.2",
     "@deepseek-ai/dsh-commands": "catalog:dsh",
     "@deepseek-ai/dsh-sandbox-policy": "catalog:dsh",
     "@deepseek-ai/dsh-system-prompt": "catalog:dsh",
     "@deepseek-ai/dsh-workspace": "catalog:dsh",
     "@types/node": "^22.10.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "focus-trap": "8.2.2",
+    "jsdom": "^26.1.0",
+    "lucide": "0.468.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tsdown": "catalog:dev",
     "typescript": "catalog:dev",
     "vitest": "catalog:dev"

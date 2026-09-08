@@ -1,27 +1,31 @@
 import type { Logger } from '../shared/log.ts'
 import type { SpaceStore } from '../store/settings.ts'
 import type { WorkspaceService } from '../workspace/core.ts'
+import type { MemberInput } from './member-draft.ts'
 import type { ChatData, ChatView, RegistrySnapshot, SpaceData, SpaceSettings, SpaceView, WorkspaceView } from './types.ts'
 import { readdir, rmdir } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { canonicalize, isUnder } from '../shared/fs-path.ts'
 import { assertDirectoryName, chatsDir, ensureDirectory, localDateName, slugify, spacesDir } from '../shared/paths.ts'
 import { finishPendingCreation, readPendingCreation, savePendingCreation, startPendingCreation } from '../store/pending.ts'
-import { chatTitle } from './chat.ts'
+import { chatTitle, prepareChatDirectories } from './chat.ts'
 import { descriptionsOf, projectDescriptions } from './lookup.ts'
+import { prepareMemberDraft, spaceRevision } from './member-draft.ts'
 import { addMemberData, ensureMemberLink, existingDirectory, findMember, memberData, removeMemberData, removeMemberLink, updateMember } from './member.ts'
+import { validateCreationId } from './validation.ts'
 
 export type SpaceOperation
-  = { op: 'create-space', name: string, folder?: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string }
-    | { op: 'enhance-space', workspace: string }
+  = { op: 'create-space', name: string, folder?: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string, members?: MemberInput[], primary?: string }
+    | { op: 'save-members', workspace: string, members: MemberInput[], primary?: string, expectedRevision: string }
+    | { op: 'enhance-space', workspace: string, members?: MemberInput[], primary?: string }
     | { op: 'attach', workspace: string, target: string, mode?: 'reference' | 'link', linkName?: string, title?: string, description?: string }
     | { op: 'detach', workspace: string, target: string }
     | { op: 'primary', workspace: string, target: string }
     | { op: 'title', workspace: string, target: string, value: string }
     | { op: 'description', workspace: string, target: string, value: string }
     | { op: 'update-member', workspace: string, target: string, title: string, description: string }
-    | { op: 'create-chat', name?: string }
-    | { op: 'drop-space', workspace: string }
+    | { op: 'create-chat', name?: string, creationId?: string }
+    | { op: 'drop-space', workspace: string, expectedRevision?: string }
     | { op: 'drop-chat', workspace: string }
 
 export interface SpaceOperations {
@@ -121,7 +125,8 @@ class SpaceOperationsImpl implements SpaceOperations {
 
   private async validatePendingPath(kind: 'space' | 'chat', key: string, path: string): Promise<void> {
     const expectedParent = await canonicalize(dirname(key)) ?? resolve(dirname(key))
-    const target = await canonicalize(path) ?? resolve(path)
+    const parent = await canonicalize(dirname(path)) ?? resolve(dirname(path))
+    const target = await canonicalize(path) ?? join(parent, basename(path))
     if (!isUnder(target, expectedParent) || dirname(target) !== expectedParent)
       throw new Error(`创建凭据中的路径超出托管目录：${path}`)
     if (kind === 'space' && basename(target) !== basename(key))
@@ -135,29 +140,32 @@ class SpaceOperationsImpl implements SpaceOperations {
     const current = this.store.read()
     switch (operation.op) {
       case 'create-space': return this.createSpace(current, operation)
-      case 'enhance-space': return this.enhanceSpace(current, operation.workspace)
+      case 'save-members': return this.saveMembers(current, operation)
+      case 'enhance-space': return this.enhanceSpace(current, operation)
       case 'attach': return this.attach(current, operation)
       case 'detach': return this.detach(current, operation)
       case 'primary': return this.primary(current, operation)
       case 'title': return this.memberTitle(current, operation)
       case 'description': return this.memberDescription(current, operation)
       case 'update-member': return this.updateMemberDetails(current, operation)
-      case 'create-chat': return this.createChat(current, operation.name)
-      case 'drop-space': return this.drop(current, operation.workspace, 'space')
+      case 'create-chat': return this.createChat(current, operation.name, operation.creationId)
+      case 'drop-space': return this.drop(current, operation.workspace, 'space', operation.expectedRevision)
       case 'drop-chat': return this.drop(current, operation.workspace, 'chat')
     }
   }
 
   private async createSpace(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'create-space' }>): Promise<Record<string, unknown>> {
     const name = assertDirectoryName(operation.name)
-    let memberInput: SpaceData['members'][number] | undefined
+    let inputs = operation.members ?? []
+    if (operation.members && (operation.folder !== undefined || operation.mode !== undefined || operation.linkName !== undefined || operation.title !== undefined || operation.description !== undefined))
+      throw new Error('members 不能与单成员选项同时提交')
     if (operation.folder) {
-      const memberPath = await existingDirectory(operation.folder)
-      memberInput = memberData({ ...operation, path: memberPath }, memberPath)
+      inputs = [{ ...operation, path: operation.folder }]
     }
     else if (operation.mode !== undefined || operation.linkName !== undefined || operation.title !== undefined || operation.description !== undefined) {
       throw new Error('成员选项必须与 folder 一起提交')
     }
+    const draft = await prepareMemberDraft(inputs, operation.primary)
     const target = join(spacesDir(this.store.root()), name)
     let pending = await readPendingCreation(target, 'space')
     if (pending)
@@ -199,31 +207,83 @@ class SpaceOperationsImpl implements SpaceOperations {
     }
     pending = { ...pending, path: core.path, workspaceId: core.workspaceId }
     await savePendingCreation(target, pending)
-    let member: SpaceData['members'][number] | undefined
-    let createdLink = false
+    const createdLinks: SpaceData['members'] = []
     try {
-      if (memberInput) {
-        member = memberInput
-        createdLink = await ensureMemberLink(core.path, member)
+      for (const member of draft.members) {
+        if (await ensureMemberLink(core.path, member))
+          createdLinks.push(member)
       }
-      const space: SpaceData = { workspaceId: core.workspaceId, ...(member ? { primary: member.path } : {}), members: member ? [member] : [] }
+      const space: SpaceData = { workspaceId: core.workspaceId, ...draft }
       await this.save({ ...clone(current), spaces: [...current.spaces, space] })
       await finishPendingCreation(target).catch(error => this.log(`[dsh-space] 清理已完成创建凭据失败：${(error as Error).message}`))
       return { space: this.spaceView(core, space) }
     }
     catch (error) {
-      if (createdLink && member)
+      for (const member of createdLinks)
         await removeMemberLink(core.path, member).catch(cleanupError => this.log(`[dsh-space] 清理未登记成员链接失败：${(cleanupError as Error).message}`))
       throw error
     }
   }
 
-  private async enhanceSpace(current: SpaceSettings, reference: string): Promise<Record<string, unknown>> {
-    const core = coreMatch(this.workspaces.list(), reference)
+  private async saveMembers(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'save-members' }>): Promise<Record<string, unknown>> {
+    const space = this.requireSpace(current, operation.workspace)
+    if (spaceRevision(space) !== operation.expectedRevision)
+      throw new Error('成员已在其他位置修改，请重新载入后编辑；当前草稿尚未保存')
+    const core = this.requireCore(space.workspaceId)
+    const draft = await prepareMemberDraft(operation.members, operation.primary, space.members)
+    const createdLinks: SpaceData['members'] = []
+    const next = { workspaceId: space.workspaceId, ...draft }
+    const removedLinks: SpaceData['members'] = []
+    let saving = false
+    const sameLink = (a: SpaceData['members'][number], b: SpaceData['members'][number]): boolean => a.mode === 'link' && b.mode === 'link' && a.path === b.path && a.linkName === b.linkName
+    try {
+      for (const member of space.members) {
+        if (member.mode === 'link' && !draft.members.some(next => sameLink(member, next)) && await removeMemberLink(core.path, member, true))
+          removedLinks.push(member)
+      }
+      for (const member of draft.members) {
+        if (!space.members.some(old => sameLink(old, member)) && await ensureMemberLink(core.path, member))
+          createdLinks.push(member)
+      }
+      saving = true
+      await this.save({ ...clone(current), spaces: replaceSpace(current.spaces, next) })
+    }
+    catch (error) {
+      const actual = this.store.read().spaces.find(row => row.workspaceId === space.workspaceId)
+      // 设置可能已落盘但响应失败，此时不能撤销已经提交的链接状态
+      if (!saving || !actual || spaceRevision(actual) !== spaceRevision(next)) {
+        const failures: string[] = []
+        for (const member of createdLinks)
+          await removeMemberLink(core.path, member, true).catch(cause => failures.push(String(cause)))
+        for (const member of removedLinks)
+          await ensureMemberLink(core.path, member).catch(cause => failures.push(String(cause)))
+        if (failures.length)
+          throw new Error(`${String(error)}；链接恢复未完成，请检查后重试：${failures.join('；')}`)
+        throw error
+      }
+    }
+    return { space: this.spaceView(core, next) }
+  }
+
+  private async enhanceSpace(current: SpaceSettings, operation: Extract<SpaceOperation, { op: 'enhance-space' }>): Promise<Record<string, unknown>> {
+    const core = coreMatch(this.workspaces.list(), operation.workspace)
     if (current.spaces.some(space => space.workspaceId === core.workspaceId) || current.chats.some(chat => chat.workspaceId === core.workspaceId))
       throw new Error(`核心工作区「${core.title}」已经有插件描述`)
-    const space: SpaceData = { workspaceId: core.workspaceId, members: [] }
-    await this.save({ ...clone(current), spaces: [...current.spaces, space] })
+    const draft = await prepareMemberDraft(operation.members ?? [], operation.primary)
+    const space: SpaceData = { workspaceId: core.workspaceId, ...draft }
+    const createdLinks: SpaceData['members'] = []
+    try {
+      for (const member of space.members) {
+        if (await ensureMemberLink(core.path, member))
+          createdLinks.push(member)
+      }
+      await this.save({ ...clone(current), spaces: [...current.spaces, space] })
+    }
+    catch (cause) {
+      for (const member of createdLinks)
+        await removeMemberLink(core.path, member).catch(error => this.log(`[dsh-space] 清理未登记成员链接失败：${(error as Error).message}`))
+      throw cause
+    }
     return { space: this.spaceView(core, space), enhanced: true }
   }
 
@@ -286,10 +346,16 @@ class SpaceOperationsImpl implements SpaceOperations {
     return { member: findMember(nextSpace, member.path) }
   }
 
-  private async createChat(current: SpaceSettings, name?: string): Promise<Record<string, unknown>> {
+  private async createChat(current: SpaceSettings, name?: string, creationId?: string): Promise<Record<string, unknown>> {
+    if (creationId !== undefined) {
+      creationId = validateCreationId(creationId)
+      const existing = current.chats.find(chat => chat.creationId === creationId)
+      if (existing)
+        return { chat: this.chatView(this.requireCore(existing.workspaceId), existing) }
+    }
     const root = this.store.root()
     const basePath = join(chatsDir(root), localDateName(), slugify(name ?? 'new-chat'))
-    const key = basePath
+    const key = creationId ? join(chatsDir(root), `request-${creationId}`) : basePath
     let pending = await readPendingCreation(key, 'chat')
     let target: string
     let createdDirectory = false
@@ -298,7 +364,18 @@ class SpaceOperationsImpl implements SpaceOperations {
       pending = await startPendingCreation(key, 'chat', target)
     }
     else {
-      await this.validatePendingPath('chat', key, pending.path)
+      if (creationId) {
+        const parent = dirname(pending.path)
+        const rootPath = await canonicalize(chatsDir(root)) ?? resolve(chatsDir(root))
+        const pendingRoot = await canonicalize(dirname(parent)) ?? resolve(dirname(parent))
+        const canonicalParent = await canonicalize(parent)
+        if (pendingRoot !== rootPath || (canonicalParent && dirname(canonicalParent) !== rootPath) || !/^\d{4}-\d{2}-\d{2}$/.test(basename(parent)))
+          throw new Error(`创建凭据中的路径超出日期对话目录：${pending.path}`)
+        await this.validatePendingPath('chat', join(parent, slugify(name ?? 'new-chat')), pending.path)
+      }
+      else {
+        await this.validatePendingPath('chat', key, pending.path)
+      }
       target = pending.path
     }
     if (!await canonicalize(target))
@@ -314,10 +391,14 @@ class SpaceOperationsImpl implements SpaceOperations {
     if (recordedCore && !await this.samePath(recordedCore.path, pending.path))
       throw new Error(`创建凭据指向的核心工作区路径已变化：${recordedCore.workspaceId}`)
     const existingCore = recordedCore ?? await this.coreByPath(path)
+    const createdChildren: string[] = []
     try {
+      await prepareChatDirectories(path, createdChildren)
       core = existingCore ?? await this.workspaces.create(path, chatTitle(path))
     }
     catch (error) {
+      for (const child of createdChildren)
+        await removeEmptyDirectory(child)
       if (createdDirectory && await removeEmptyDirectory(path))
         await finishPendingCreation(key)
       throw error
@@ -328,23 +409,29 @@ class SpaceOperationsImpl implements SpaceOperations {
       await finishPendingCreation(key)
       throw new Error(`对话工作区「${core.title}」已经登记`)
     }
-    const chat: ChatData = { workspaceId: core.workspaceId }
+    const chat: ChatData = { workspaceId: core.workspaceId, ...(creationId ? { creationId } : {}) }
     try {
       await this.save({ ...clone(current), chats: [...current.chats, chat] })
-      await finishPendingCreation(key).catch(error => this.log(`[dsh-space] 清理已完成创建凭据失败：${(error as Error).message}`))
     }
     catch (error) {
-      if (createdDirectory)
-        await removeEmptyDirectory(path)
-      throw error
+      if (!this.store.read().chats.some(row => row.workspaceId === core.workspaceId && row.creationId === creationId)) {
+        for (const child of createdChildren)
+          await removeEmptyDirectory(child)
+        if (createdDirectory)
+          await removeEmptyDirectory(path)
+        throw error
+      }
     }
+    await finishPendingCreation(key).catch(error => this.log(`[dsh-space] 清理已完成创建凭据失败：${(error as Error).message}`))
     return { chat: this.chatView(core, chat) }
   }
 
-  private async drop(current: SpaceSettings, reference: string, kind: 'space' | 'chat'): Promise<Record<string, unknown>> {
+  private async drop(current: SpaceSettings, reference: string, kind: 'space' | 'chat', expectedRevision?: string): Promise<Record<string, unknown>> {
     const found = descriptionMatch(current, reference)
     if (found.kind !== kind)
       throw new Error(`「${reference}」不是${kind === 'space' ? '多项目' : '对话'}工作区描述`)
+    if (found.kind === 'space' && expectedRevision !== undefined && spaceRevision(found.value) !== expectedRevision)
+      throw new Error('成员已在其他位置修改，请重新载入后检查')
     const next = clone(current)
     if (kind === 'space')
       next.spaces = next.spaces.filter(space => space.workspaceId !== found.value.workspaceId)
@@ -370,7 +457,7 @@ class SpaceOperationsImpl implements SpaceOperations {
   }
 
   private spaceView(core: WorkspaceView, space: SpaceData): SpaceView {
-    return { ...core, ...space, status: 'ready' }
+    return { ...core, ...space, revision: spaceRevision(space), status: 'ready' }
   }
 
   private chatView(core: WorkspaceView, chat: ChatData): ChatView {

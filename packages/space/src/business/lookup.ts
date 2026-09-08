@@ -1,4 +1,5 @@
 import type { ChatData, ChatView, InvalidRecord, RegistryItem, SpaceData, SpaceView, WorkspaceView } from './types.ts'
+import { spaceRevision } from './member-draft.ts'
 
 export interface DescriptionLookup {
   spaces: Map<string, SpaceData>
@@ -27,7 +28,7 @@ export function projectDescriptions(workspaces: WorkspaceView[], lookup: Descrip
   for (const workspace of workspaces) {
     const space = lookup.spaces.get(workspace.workspaceId)
     if (space) {
-      const item = { kind: 'space' as const, ...workspace, ...space, status: 'ready' as const }
+      const item = { kind: 'space' as const, ...workspace, ...space, revision: spaceRevision(space), status: 'ready' as const }
       spaces.push(item)
       items.push(item)
       continue

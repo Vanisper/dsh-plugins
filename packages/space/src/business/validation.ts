@@ -1,11 +1,11 @@
-import type { MemberData, SpaceData, SpaceSettings } from './types.ts'
+import type { ChatData, MemberData, SpaceData, SpaceSettings } from './types.ts'
 import { isAbsolute } from 'node:path'
 import { assertPathSegment } from '../shared/paths.ts'
 import { assertMemberReferences } from './member.ts'
 
 const MEMBER_KEYS = new Set(['path', 'mode', 'linkName', 'title', 'description'])
 const SPACE_KEYS = new Set(['workspaceId', 'primary', 'members'])
-const CHAT_KEYS = new Set(['workspaceId'])
+const CHAT_KEYS = new Set(['workspaceId', 'creationId'])
 const SETTINGS_KEYS = new Set(['root', 'spaces', 'chats'])
 
 function rejectUnknown(value: Record<string, unknown>, allowed: Set<string>, label: string): void {
@@ -76,11 +76,21 @@ function validateSpace(value: unknown, index: number): SpaceData {
   }
 }
 
-function validateChat(value: unknown, index: number): { workspaceId: string } {
+/** 创建去重标识必须是 UUID，不能作为任意路径片段 */
+export function validateCreationId(value: string): string {
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value))
+    throw new Error('creationId 必须是 UUID')
+  return value.toLowerCase()
+}
+
+function validateChat(value: unknown, index: number): ChatData {
   if (!isRecord(value))
     throw new Error(`对话记录 ${index + 1} 不是对象`)
   rejectUnknown(value, CHAT_KEYS, `对话记录 ${index + 1} `)
-  return { workspaceId: requiredString(value.workspaceId, `对话记录 ${index + 1} 的 workspaceId`) }
+  return {
+    workspaceId: requiredString(value.workspaceId, `对话记录 ${index + 1} 的 workspaceId`),
+    ...(value.creationId === undefined ? {} : { creationId: validateCreationId(requiredString(value.creationId, 'creationId')) }),
+  }
 }
 
 /** 校验设置边界；不会迁移或猜测任何旧记录 */
@@ -98,12 +108,17 @@ export function validateSettings(value: unknown): SpaceSettings {
   const spaces = value.spaces.map(validateSpace)
   const chats = value.chats.map(validateChat)
   const owners = new Set<string>()
+  const creations = new Set<string>()
   for (const space of spaces) {
     if (owners.has(space.workspaceId))
       throw new Error(`核心工作区 ${space.workspaceId} 不能同时拥有多个插件描述`)
     owners.add(space.workspaceId)
   }
   for (const chat of chats) {
+    if (chat.creationId && creations.has(chat.creationId))
+      throw new Error('对话创建标识不能重复')
+    if (chat.creationId)
+      creations.add(chat.creationId)
     if (owners.has(chat.workspaceId))
       throw new Error(`核心工作区 ${chat.workspaceId} 不能同时拥有多个插件描述`)
     owners.add(chat.workspaceId)

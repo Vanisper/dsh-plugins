@@ -16,7 +16,7 @@ export function registerPromptContext(ctx: Context, operations: SpaceOperations)
       if (!item || item.kind === 'plain')
         return ''
       if (item.kind === 'chat')
-        return `当前会话属于对话工作区「${item.title}」。固定入口目录：${item.path}`
+        return `当前会话属于对话工作区「${item.title}」。固定入口目录：${item.path}\nwork/ 用于过程文件和工作材料，outputs/ 用于交付产物。`
       const members = item.members.map(member => `- ${member.mode === 'link' && member.linkName ? `${item.path}/projects/${member.linkName} -> ${member.path}` : member.path}${member.path === item.primary ? '（主成员）' : ''}`)
       return [`当前会话属于多项目工作区「${item.title}」`, `固定入口目录：${item.path}`, '成员目录：', ...members].join('\n')
     },

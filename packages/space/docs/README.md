@@ -4,7 +4,8 @@
 
 - [插件说明](../README.md)：用户可见能力、边界和宿主接口
 - [实现设计](design.md)：领域模型、运行链路、模块职责和演进路线
-- [交互设计与验收](ui.md)：以插件场景为主的交互流程、后续完善范围和阶段门禁
+- [交互设计与验收](ui.md)：以插件场景为主的交互契约与阶段门禁
+- [上线验收记录](acceptance.md)：验证环境、已验证链路和发布边界
 - [上下文](../CONTEXT.md)：稳定术语、唯一事实源和降级规则
 
 ## 决策
@@ -16,3 +17,7 @@
 
 - [会话级多目录机制](research/multi-root-session-level.md)
 - [编辑器侧多根工作区](research/multi-root-editor-level.md)
+
+## 待实施方案
+
+- [工作区交互整理](workspace-interaction-refresh.md)：创建与编辑、链接和空间化切换、快速对话目录及拖拽反馈

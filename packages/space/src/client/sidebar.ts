@@ -1767,12 +1767,20 @@ export function createSidebar(
               e(Icon, { name: 'external', size: 14 }),
             )
           : null,
-        session && item
+        session && item?.kind === 'chat'
           ? e(
               'button',
-              { 'type': 'button', 'className': 'dsh-space-detail-path', 'aria-label': item.kind === 'chat' ? '打开工作目录' : undefined, 'onClick': () => item.kind === 'chat' ? perform(() => workspaces.openPath(item.path)) : showInfo({ kind: 'workspace', id: item.workspaceId }) },
-              e(Icon, { name: item.kind === 'space' ? 'layers' : 'folder' }),
-              item.kind === 'chat' ? pathText(item.path) : item.title,
+              { 'type': 'button', 'className': 'dsh-space-detail-path', 'aria-label': '打开工作目录', 'onClick': () => perform(() => workspaces.openPath(item.path)) },
+              e(Icon, { name: 'folder' }),
+              pathText(item.path),
+            )
+          : null,
+        session && item && item.kind !== 'chat'
+          ? e(
+              'div',
+              { className: 'dsh-space-detail-workspace' },
+              e(Icon, { name: item.kind === 'space' ? 'layers' : 'folder', size: 14 }),
+              e('span', null, e('span', { className: 'dsh-space-visually-hidden' }, '所属工作区：'), item.title),
             )
           : null,
         !session && item?.kind === 'space'

@@ -434,6 +434,40 @@ it('会话悬浮预览只展示摘要，移入后仍可原位改名', async () =
   expect(document.querySelector('input[aria-label="名称"]')).not.toBeNull()
 })
 
+it.each([
+  ['workspaces', 'space'],
+  ['workspaces', 'plain'],
+  ['groups', 'space'],
+  ['groups', 'plain'],
+] as const)('%s 视图的 %s 会话归属是静态标识，不切换项目浮层', async (view, kind) => {
+  createLayoutStore().setView(view)
+  const { item, workspaces, sessions } = await mount()
+  const title = '一个完整保留且不截断的项目名称 with-long-name'
+  item.title = title
+  await registry({ ...fixture.registry!, items: [{ ...item, kind, title }] })
+  await hoverInfo('session')
+  const panel = document.querySelector('.dsh-space-details.session')!
+  expect(panel.querySelector('.dsh-space-detail-path')).toBeNull()
+  const owner = panel.querySelector<HTMLElement>('.dsh-space-detail-workspace')!
+  expect(owner.textContent).toContain(title)
+  expect(owner.matches('button, a, [role="button"], [tabindex]')).toBe(false)
+  expect(owner.querySelector('svg')?.getAttribute('width')).toBe('14')
+  await act(async () => owner.click())
+  expect(document.querySelector('.dsh-space-details')).toBe(panel)
+  expect(document.querySelector('[aria-label="工作区信息"]')).toBeNull()
+  expect(workspaces.openPath).not.toHaveBeenCalled()
+  expect(sessions.open).not.toHaveBeenCalled()
+})
+
+it('未归属工作区的会话悬停不补造项目浮层和归属标识', async () => {
+  const { workspaceSnapshot } = await mount()
+  workspaceSnapshot.items = []
+  await registry({ ...fixture.registry!, items: [] })
+  await hoverInfo('session')
+  expect(document.querySelector('.dsh-space-details')).toBeNull()
+  expect(document.querySelector('.dsh-space-detail-workspace')).toBeNull()
+})
+
 it('浮层路径按目录分段，保留中文、连字符和 Windows 分隔符', async () => {
   const { item } = await mount()
   const paths = [

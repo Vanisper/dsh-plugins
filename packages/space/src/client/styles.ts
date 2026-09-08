@@ -204,6 +204,9 @@ export const sidebarCss = `
 .dsh-space-details-title:is(:hover,:focus-visible) svg{opacity:1}
 .dsh-space-details-body,.dsh-space-detail-meta{display:flex;flex-direction:column;gap:2px;border:0;padding:0;margin:0;min-width:0}
 .dsh-space-detail-status{display:flex;align-items:center;gap:8px;min-height:20px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
+.dsh-space-detail-workspace{display:flex;align-items:flex-start;align-self:flex-start;gap:6px;min-width:0;max-width:100%;font-size:12px;line-height:20px;color:var(--dsw-alias-label-secondary)}
+.dsh-space-detail-workspace>svg{flex:none;margin-block:3px}
+.dsh-space-detail-workspace>span{min-width:0;overflow-wrap:anywhere}
 .dsh-space-detail-path{display:flex;align-items:center;gap:8px;width:100%;min-width:0;padding:4px 0;border:0;border-radius:4px;background:transparent;text-align:left;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .dsh-space-detail-path:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsh-space-detail-path svg{flex:none}

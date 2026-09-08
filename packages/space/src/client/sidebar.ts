@@ -938,7 +938,7 @@ export function createSidebar(
       const status = sessionStatus(session)
       const pin: Pin = { kind: 'session', id: session.id }
       const statusNode = (): unknown => e('span', { 'className': 'dsh-space-status', 'role': status.visible ? 'img' : undefined, 'aria-label': status.visible ? status.label : undefined, 'aria-hidden': status.visible ? undefined : true }, status.visible ? e(StateDot, { state: status.state }) : null)
-      const pinButton = (): unknown => e(IconButton, { icon: isPinned(pin) ? 'unpin' : 'pin', label: `${isPinned(pin) ? '取消置顶' : '置顶'} ${session.displayTitle}`, disabled: busy, onClick: () => pinAction(pin).run() })
+      const pinButton = (): unknown => e(IconButton, { icon: isPinned(pin) ? 'unpin' : 'pin', label: `${isPinned(pin) ? '取消置顶' : '置顶'} ${session.displayTitle}`, tooltip: isPinned(pin) ? '取消置顶' : '置顶', disabled: busy, onClick: () => pinAction(pin).run() })
       const canDrag = !busy
       const acceptsSession = (): boolean => {
         const source = drag.getSnapshot().source
@@ -1048,10 +1048,12 @@ export function createSidebar(
           : [...(activeView === 'groups' ? [pinButton()] : []), e(IconButton, {
               icon: 'archive',
               label: `归档 ${session.displayTitle}`,
+              tooltip: '归档',
               disabled: busy,
               onClick: () => archive(session),
             }), e(Menu, {
               label: `${session.displayTitle} 会话操作`,
+              tooltip: '会话操作',
               disabled: busy,
               actions: sessionActions(session, item),
             })])),
@@ -1138,11 +1140,13 @@ export function createSidebar(
           e(IconButton, {
             icon: 'chat',
             label: `在 ${item.title} 中新建会话`,
+            tooltip: '新建会话',
             disabled: busy,
             onClick: () => beginDraft(item.workspaceId),
           }),
           e(Menu, {
             label: `${item.title} 工作区操作`,
+            tooltip: '工作区操作',
             disabled: busy,
             actions: workspaceActions(item),
           }),
@@ -1155,6 +1159,7 @@ export function createSidebar(
       icon: 'filter',
       badge: layout.sorts[key] === 'manual' ? 'hand' : layout.sorts[key] === 'updated' ? 'clock' : undefined,
       label: `${label}排序方式`,
+      tooltip: '排序方式',
       disabled: busy,
       actions: [
         { label: '最近更新', icon: 'clock', checked: listSort(layout, key) === 'updated', run: () => layoutStore.setListSort(key, 'updated') },
@@ -1203,7 +1208,7 @@ export function createSidebar(
         'onDragStart': (event: DragEvent) => beginDrag({ kind: 'section', id }, event),
         'onDragEnd': drag.reset,
         'onClick': () => layoutStore.setCollapsed(id, open),
-      }, sectionLabels[id], e(Icon, { name: open ? 'chevronDown' : 'chevronRight', size: 12 })), e(Menu, { label: `${sectionLabels[id]}分区操作`, actions, disabled: busy }), renderSort(projectKey(id), sectionLabels[id]), id === 'chats' ? e(IconButton, { icon: 'chat', label: '新建独立对话', disabled: busy || !registry, onClick: createChat }) : null, id === 'workspaces'
+      }, sectionLabels[id], e(Icon, { name: open ? 'chevronDown' : 'chevronRight', size: 12 })), e(Menu, { label: `${sectionLabels[id]}分区操作`, tooltip: '分区操作', actions, disabled: busy }), renderSort(projectKey(id), sectionLabels[id]), id === 'chats' ? e(IconButton, { icon: 'chat', label: '新建独立对话', disabled: busy || !registry, onClick: createChat }) : null, id === 'workspaces'
         ? e(IconButton, { label: '创建工作区', icon: 'plus', disabled: busy || !registry, onClick: () => begin({ type: 'create-workspace' }) })
         : null), open
         ? renderLimited(sections[id], id, sectionLabels[id], ownsCurrent, entry => e('div', {
@@ -1233,7 +1238,7 @@ export function createSidebar(
       }
       const renderDraft = (groupId: string, label: string, empty: boolean): unknown => {
         if (hasDraft(groupId)) {
-          return e('div', { 'className': 'dsh-space-group-draft', 'aria-label': `${label} 新会话草稿` }, e('span', { className: 'dsh-space-draft-label' }, '新建会话'), e('span', { className: 'dsh-space-title' }, items.find(item => item.workspaceId === draftState.targetId)?.title ?? '独立对话'), e(IconButton, { icon: 'close', label: `关闭 ${label} 新会话草稿`, disabled: busy || draftState.phase === 'creating', onClick: () => {
+          return e('div', { 'className': 'dsh-space-group-draft', 'aria-label': `${label} 新会话草稿` }, e('span', { className: 'dsh-space-draft-label' }, '新建会话'), e('span', { className: 'dsh-space-title' }, items.find(item => item.workspaceId === draftState.targetId)?.title ?? '独立对话'), e(IconButton, { icon: 'close', label: `关闭 ${label} 新会话草稿`, tooltip: '关闭草稿', disabled: busy || draftState.phase === 'creating', onClick: () => {
             if (draft.hasContent() || draftState.creationId) {
               begin({ type: 'discard-draft' })
               return
@@ -1307,7 +1312,7 @@ export function createSidebar(
             'onDragStart': (event: DragEvent) => beginDrag({ kind: 'group', id: group.id }, event),
             'onDragEnd': drag.reset,
             'onClick': () => layoutStore.setGroupCollapsed(group.id, !group.collapsed),
-          }, e('span', { className: 'dsh-space-group-symbol' }, e(Icon, { name: 'hash', size: 14 })), e('span', { className: 'dsh-space-title' }, group.title), e(Icon, { name: group.collapsed && !dragState.previews.includes(groupKey(group.id)) ? 'chevronRight' : 'chevronDown', size: 12 })), e(Menu, { label: `${group.title} 分组操作`, disabled: busy, actions: [
+          }, e('span', { className: 'dsh-space-group-symbol' }, e(Icon, { name: 'hash', size: 14 })), e('span', { className: 'dsh-space-title' }, group.title), e(Icon, { name: group.collapsed && !dragState.previews.includes(groupKey(group.id)) ? 'chevronRight' : 'chevronDown', size: 12 })), e(Menu, { label: `${group.title} 分组操作`, tooltip: '分组操作', disabled: busy, actions: [
             { label: '编辑分组', icon: 'edit', run: () => editGroup(group) },
             { label: '上移分组', icon: 'up', disabled: index === 0, run: () => layoutStore.moveGroup(group.id, layout.groups[index - 1]?.id) },
             { label: '下移分组', icon: 'down', disabled: index === layout.groups.length - 1, run: () => layoutStore.moveGroup(group.id, layout.groups[index + 2]?.id) },
@@ -1315,6 +1320,7 @@ export function createSidebar(
           ] }), renderSort(groupKey(group.id), group.title), e('span', { 'className': 'dsh-space-count dsh-space-group-count', 'aria-label': `${entries.length} 个会话${hasDraft(group.id) ? '，1 个草稿' : ''}` }, entries.length + Number(hasDraft(group.id))), e(IconButton, {
             icon: 'newMessage',
             label: `${group.title} 新建会话`,
+            tooltip: '新建会话',
             className: 'dsh-space-always-visible',
             disabled: busy || draftState.phase === 'creating',
             onClick: () => newDraft(group.id),
@@ -1409,10 +1415,11 @@ export function createSidebar(
             e(IconButton, {
               icon: 'open',
               label: `打开 ${item.title} 的工作目录`,
+              tooltip: '打开工作目录',
               disabled: busy,
               onClick: () => perform(() => workspaces.openPath(item.path)),
             }),
-            e(Menu, { label: `${item.title} 工作区操作`, actions: workspaceActions(item), disabled: busy }),
+            e(Menu, { label: `${item.title} 工作区操作`, tooltip: '工作区操作', actions: workspaceActions(item), disabled: busy }),
           )),
           !items.some(item => item.kind === 'chat') ? e('p', { className: 'dsh-space-muted' }, '暂无对话目录') : null,
         )
@@ -1588,6 +1595,7 @@ export function createSidebar(
                   e(IconButton, {
                     icon: 'remove',
                     label: `清理 ${row.workspaceId}`,
+                    tooltip: '清理失效描述',
                     onClick: () => begin({
                       type: 'drop-invalid',
                       kind,

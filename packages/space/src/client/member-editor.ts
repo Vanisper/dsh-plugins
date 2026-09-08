@@ -159,6 +159,7 @@ export function createMemberEditor(
               e(IconButton, {
                 icon: 'close',
                 label: `移除成员 ${memberLabel(member)}`,
+                tooltip: '移除成员',
                 onClick: () => {
                   const remaining = draft.members.filter(
                     row => row.path !== member.path,

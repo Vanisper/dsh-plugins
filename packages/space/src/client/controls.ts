@@ -98,12 +98,14 @@ interface IconProps {
 interface ButtonProps {
   icon: IconName
   label: string
+  tooltip?: string
   onClick: () => void
   disabled?: boolean
   className?: string
 }
 interface MenuProps {
   label: string
+  tooltip?: string
   actions: MenuAction[]
   disabled?: boolean
   icon?: IconName
@@ -220,22 +222,17 @@ export function createControls(React: ReactLike): Controls {
   function IconButton({
     icon,
     label,
+    tooltip = label,
     onClick,
     disabled,
     className = '',
-  }: {
-    icon: IconName
-    label: string
-    onClick: () => void
-    disabled?: boolean
-    className?: string
-  }): unknown {
+  }: ButtonProps): unknown {
     return e(
       'button',
       {
         'type': 'button',
         'className': `dsh-space-icon ${className}`,
-        ...tooltipProps(label),
+        ...tooltipProps(tooltip),
         'aria-label': label,
         'disabled': disabled,
         onClick,
@@ -245,6 +242,7 @@ export function createControls(React: ReactLike): Controls {
   }
   function Menu({
     label,
+    tooltip = label,
     actions,
     disabled,
     icon = 'more',
@@ -374,7 +372,7 @@ export function createControls(React: ReactLike): Controls {
           'type': 'button',
           'className': 'dsh-space-icon dsh-space-menu-trigger',
           'aria-label': label,
-          ...tooltipProps(label),
+          ...tooltipProps(tooltip),
           'aria-haspopup': 'menu',
           'aria-expanded': open,
           disabled,

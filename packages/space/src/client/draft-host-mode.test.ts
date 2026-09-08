@@ -188,11 +188,21 @@ describe('通用新会话的编辑上下文', () => {
     h.workspaces.startSession()
     expect(h.draft.getSnapshot()).toMatchObject({ active: true, targetId: undefined })
     h.sessions.open('official-session')
+    h.workspaces.list.set({ ...h.workspaces.list.getSnapshot(), items: [...h.workspaces.list.getSnapshot().items, { workspaceId: 'explicit-project', path: '/explicit', title: '显式项目', sessionIds: [] }] })
     h.workspaces.startSession('explicit-project')
-    expect(h.draft.getSnapshot().targetId).toBe('explicit-project')
+    await vi.waitFor(() => expect(h.draft.getSnapshot().targetId).toBe('explicit-project'))
     h.draft.begin()
     expect(h.draft.getSnapshot().targetId).toBeUndefined()
-    expect(h.fetchMock.mock.calls.filter(([url]) => url.endsWith('/registry'))).toHaveLength(0)
+    expect(h.fetchMock.mock.calls.filter(([url]) => url.endsWith('/registry'))).toHaveLength(1)
+  })
+
+  it('显式传入 Chat 也开始新的独立草稿，不复用原目录', async () => {
+    const h = await harness()
+    h.registry.items = [{ kind: 'chat', workspaceId: 'project', path: '/project', title: '快速对话', sessionIds: [] }]
+    h.sessions.open('official-session')
+    h.workspaces.startSession('project')
+    await vi.waitFor(() => expect(h.draft.getSnapshot()).toMatchObject({ active: true, targetId: undefined }))
+    expect(h.sessions.create).not.toHaveBeenCalled()
   })
 
   it('核心归属未就绪时留在原会话，描述读取失败后可以重试', async () => {
@@ -295,6 +305,7 @@ describe('通用新会话的编辑上下文', () => {
 
   it('创建失败后的目标锁和重试身份不被通用新建解除', async () => {
     const h = await harness()
+    h.registry.items = [{ kind: 'plain', workspaceId: 'project', path: '/project', title: '项目', sessionIds: [] }]
     h.draft.begin('project')
     h.sessions.create.mockRejectedValueOnce(new Error('offline'))
     await expect(h.draft.submit({ text: '内容', imageIds: [] }, new AbortController().signal)).rejects.toThrow('offline')

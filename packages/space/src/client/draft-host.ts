@@ -4,7 +4,7 @@ import type { ModeStore } from './mode.ts'
 import type { NativeEntry, NativeInput } from './native-compat.ts'
 import type { HostWorkspacePickerProps } from './target-picker.ts'
 import type { ConversationService, ReactLike, SessionService, SlotsService, WorkspaceService } from './types.ts'
-import { runOperation } from './api.ts'
+import { fetchRegistry, runOperation } from './api.ts'
 import { createControls } from './controls.ts'
 import { createDraftCommands } from './draft-commands.ts'
 import { createDraftIntentChip, draftPlaceholders } from './draft-intent-chip.ts'
@@ -81,6 +81,18 @@ export function createDraftComposer(
     async create(workspaceId, sessionId) {
       await workspaces.refresh()
       await sessions.refresh()
+      const registry = await fetchRegistry(AbortSignal.timeout(5000))
+      const item = registry.items.find(row => row.workspaceId === workspaceId)
+      const state = draft.getSnapshot()
+      if (!item)
+        throw new Error('目标工作区已不存在，请检查后重试')
+      if (state.targetId === undefined) {
+        if (item.kind !== 'chat' || item.creationId !== state.creationId)
+          throw new Error('快速对话工作区的创建凭据已变化，未创建会话')
+      }
+      else if (item.kind === 'chat') {
+        throw new Error('此工作区用于独立对话，请新建独立对话或分叉现有会话')
+      }
       if (sessions.list.getSnapshot().byId[sessionId]) {
         const owner = workspaces.list.getSnapshot().items.find(item => item.sessionIds.includes(sessionId))
         if (owner?.workspaceId !== workspaceId)

@@ -2,7 +2,7 @@ import type { DraftSession } from './draft-session.ts'
 import type { SessionService, WorkspaceService } from './types.ts'
 import { fetchRegistry } from './api.ts'
 
-/** 通用新建沿用当前编辑目标；显式工作区不参与推断，描述读取失败时保留当前位置 */
+/** 通用新建沿用当前编辑目标；显式入口同样排除 Chat，描述读取失败时保留当前位置 */
 export function createNewSessionAction(
   draft: Pick<DraftSession, 'begin' | 'subscribe' | 'getSnapshot'>,
   sessions: Pick<SessionService, 'list'>,
@@ -36,13 +36,13 @@ export function createNewSessionAction(
       const start = (id?: string): void => groupId === undefined ? draft.begin(id) : draft.begin(id, groupId)
       if (disposed || draft.getSnapshot().phase === 'creating')
         return
-      if (workspaceId !== undefined) {
+      const current = sessions.list.getSnapshot().current
+      const state = draft.getSnapshot()
+      if (workspaceId !== undefined && state.creationId) {
         start(workspaceId)
         return
       }
-      const current = sessions.list.getSnapshot().current
-      const state = draft.getSnapshot()
-      if (current === undefined) {
+      if (workspaceId === undefined && current === undefined) {
         start(state.active ? state.targetId : undefined)
         return
       }
@@ -51,9 +51,12 @@ export function createNewSessionAction(
         notify('正在读取会话所属工作区，请稍后重试')
         return
       }
-      const owner = core.items.find(item => item.sessionIds.includes(current))
+      const owner = core.items.find(item => workspaceId !== undefined ? item.workspaceId === workspaceId : item.sessionIds.includes(current!))
       if (!owner) {
-        start()
+        if (workspaceId !== undefined)
+          notify('目标工作区已不存在，请重新选择')
+        else
+          start()
         return
       }
       // 核心列表决定归属，附加描述只用于区分项目与独立对话的存储工作区
@@ -63,7 +66,7 @@ export function createNewSessionAction(
         if (disposed || request !== pending)
           return
         const latest = workspaces.list.getSnapshot()
-        if (latest.phase !== 'ready' || latest.items.find(item => item.sessionIds.includes(current))?.workspaceId !== owner.workspaceId) {
+        if (latest.phase !== 'ready' || latest.items.find(item => workspaceId !== undefined ? item.workspaceId === workspaceId : item.sessionIds.includes(current!))?.workspaceId !== owner.workspaceId) {
           notify('会话所属工作区已变化，请重新新建会话')
           return
         }

@@ -322,6 +322,72 @@ describe('create chat', () => {
   })
 })
 
+describe('快速对话目录', () => {
+  it('新建预置 work 和 outputs，已完成请求重试不修改用户目录', async () => {
+    const root = await temporaryRoot()
+    const workspaces = fakeWorkspaces()
+    const operations = createSpaceOperations(fakeStore(root), workspaces)
+    const op = { op: 'create-chat' as const, creationId: '87c7c251-ef11-4b65-ae0e-d09f8495ebcd' }
+    await operations.execute(op)
+    const path = workspaces.rows[0]!.path
+    expect(await readdir(path)).toEqual(['outputs', 'work'])
+    await writeFile(join(path, 'work/keep.txt'), '保留')
+    await rm(join(path, 'outputs'), { recursive: true })
+    await operations.execute(op)
+    expect(workspaces.rows).toHaveLength(1)
+    expect(await readFile(join(path, 'work/keep.txt'), 'utf8')).toBe('保留')
+    expect(await exists(join(path, 'outputs'))).toBe(false)
+  })
+
+  it.each(['file', 'symlink'] as const)('未完成创建遇到 %s 拒绝覆盖，修复后补齐目录并重试', async (kind) => {
+    const root = await temporaryRoot()
+    const path = join(chatsDir(root), localDateName(), 'topic')
+    await mkdir(path, { recursive: true })
+    await startPendingCreation(path, 'chat')
+    if (kind === 'file')
+      await writeFile(join(path, 'outputs'), '保留')
+    else
+      await symlink(root, join(path, 'outputs'), 'dir')
+    const workspaces = fakeWorkspaces()
+    const operations = createSpaceOperations(fakeStore(root), workspaces)
+    await expect(operations.execute({ op: 'create-chat', name: 'topic' })).rejects.toThrow('真实目录')
+    expect(workspaces.rows).toHaveLength(0)
+    expect(await exists(join(path, 'work'))).toBe(false)
+    expect(await lstat(join(path, 'outputs')).then(stat => stat.isSymbolicLink())).toBe(kind === 'symlink')
+    await rm(join(path, 'outputs'))
+    await operations.execute({ op: 'create-chat', name: 'topic' })
+    expect(await readdir(path)).toEqual(['outputs', 'work'])
+  })
+
+  it('设置失败不删非空子目录，重试保留内容和核心身份', async () => {
+    const root = await temporaryRoot()
+    const store = fakeStore(root)
+    const workspaces = fakeWorkspaces()
+    const operations = createSpaceOperations(store, workspaces)
+    const path = join(chatsDir(root), localDateName(), 'topic')
+    store.failNextReplace = true
+    store.beforeReplace = async () => writeFile(join(path, 'work/keep.txt'), '保留')
+    await expect(operations.execute({ op: 'create-chat', name: 'topic' })).rejects.toThrow('settings write failed')
+    expect(await exists(join(path, 'outputs'))).toBe(false)
+    await operations.execute({ op: 'create-chat', name: 'topic' })
+    expect(workspaces.rows).toHaveLength(1)
+    expect(await readdir(path)).toEqual(['outputs', 'work'])
+    expect(await readFile(join(path, 'work/keep.txt'), 'utf8')).toBe('保留')
+  })
+
+  it('描述已保存而响应失败时不撤销预置目录', async () => {
+    const root = await temporaryRoot()
+    const store = fakeStore(root)
+    store.afterReplace = async () => {
+      throw new Error('response lost')
+    }
+    const workspaces = fakeWorkspaces()
+    await createSpaceOperations(store, workspaces).execute({ op: 'create-chat' })
+    expect(store.value.chats).toHaveLength(1)
+    expect(await readdir(workspaces.rows[0]!.path)).toEqual(['outputs', 'work'])
+  })
+})
+
 describe('operation queue', () => {
   it('reads settings again when a queued operation starts', async () => {
     const root = await temporaryRoot()

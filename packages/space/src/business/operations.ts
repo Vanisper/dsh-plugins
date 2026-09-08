@@ -8,7 +8,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { canonicalize, isUnder } from '../shared/fs-path.ts'
 import { assertDirectoryName, chatsDir, ensureDirectory, localDateName, slugify, spacesDir } from '../shared/paths.ts'
 import { finishPendingCreation, readPendingCreation, savePendingCreation, startPendingCreation } from '../store/pending.ts'
-import { chatTitle } from './chat.ts'
+import { chatTitle, prepareChatDirectories } from './chat.ts'
 import { descriptionsOf, projectDescriptions } from './lookup.ts'
 import { prepareMemberDraft, spaceRevision } from './member-draft.ts'
 import { addMemberData, ensureMemberLink, existingDirectory, findMember, memberData, removeMemberData, removeMemberLink, updateMember } from './member.ts'
@@ -391,10 +391,14 @@ class SpaceOperationsImpl implements SpaceOperations {
     if (recordedCore && !await this.samePath(recordedCore.path, pending.path))
       throw new Error(`创建凭据指向的核心工作区路径已变化：${recordedCore.workspaceId}`)
     const existingCore = recordedCore ?? await this.coreByPath(path)
+    const createdChildren: string[] = []
     try {
+      await prepareChatDirectories(path, createdChildren)
       core = existingCore ?? await this.workspaces.create(path, chatTitle(path))
     }
     catch (error) {
+      for (const child of createdChildren)
+        await removeEmptyDirectory(child)
       if (createdDirectory && await removeEmptyDirectory(path))
         await finishPendingCreation(key)
       throw error
@@ -408,13 +412,17 @@ class SpaceOperationsImpl implements SpaceOperations {
     const chat: ChatData = { workspaceId: core.workspaceId, ...(creationId ? { creationId } : {}) }
     try {
       await this.save({ ...clone(current), chats: [...current.chats, chat] })
-      await finishPendingCreation(key).catch(error => this.log(`[dsh-space] 清理已完成创建凭据失败：${(error as Error).message}`))
     }
     catch (error) {
-      if (createdDirectory)
-        await removeEmptyDirectory(path)
-      throw error
+      if (!this.store.read().chats.some(row => row.workspaceId === core.workspaceId && row.creationId === creationId)) {
+        for (const child of createdChildren)
+          await removeEmptyDirectory(child)
+        if (createdDirectory)
+          await removeEmptyDirectory(path)
+        throw error
+      }
     }
+    await finishPendingCreation(key).catch(error => this.log(`[dsh-space] 清理已完成创建凭据失败：${(error as Error).message}`))
     return { chat: this.chatView(core, chat) }
   }
 

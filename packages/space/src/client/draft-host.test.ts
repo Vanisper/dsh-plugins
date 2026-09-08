@@ -1,6 +1,6 @@
 import type { DraftHostConversation, DraftHostSessions } from './draft-host.ts'
 import type { LayoutStore } from './layout.ts'
-import type { ReactLike, SessionSnapshot, SlotsService, WorkspaceService } from './types.ts'
+import type { ReactLike, RegistryItem, SessionSnapshot, SlotsService, WorkspaceService } from './types.ts'
 import * as React from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDraftComposer } from './draft-host.ts'
@@ -20,6 +20,14 @@ function store<T>(state: T) {
 }
 
 function harness(layout?: LayoutStore) {
+  const registry = { items: [{ kind: 'plain', workspaceId: 'project', path: '/project', title: '项目', sessionIds: [] }] as RegistryItem[] }
+  const previousFetch = globalThis.fetch
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/registry'))
+      return new Response(JSON.stringify(registry))
+    return previousFetch(url, init)
+  })
+  vi.stubGlobal('fetch', fetchMock)
   const snapshot: SessionSnapshot = { ids: [], byId: {}, phase: 'ready' }
   const require = (name: string): unknown => name === '@deepseek-ai/dsh-client-runtime/client' ? { createSnapshotStore: store } : {}
   const { Shell } = createNativeComposer(require)
@@ -46,10 +54,61 @@ function harness(layout?: LayoutStore) {
   const conversation = { input: { for: () => target }, blocks: { storeFor: () => block }, releaseDraftImage: vi.fn() }
   const ctx = { get: () => ({ live: { contributions: new Map() } }) }
   const composer = createDraftComposer(React as unknown as ReactLike, require, ctx, {} as SlotsService, sessions as unknown as DraftHostSessions, workspaces as unknown as WorkspaceService, conversation as unknown as DraftHostConversation, layout)
-  return { composer, sessions, target, send, block, command, conversation }
+  return { composer, sessions, target, send, block, command, conversation, registry, fetchMock }
 }
 
 describe('原生草稿接入宿主', () => {
+  it.each(['chat', 'missing', 'offline'] as const)('最终创建边界拒绝不可用的显式目标：%s', async (kind) => {
+    const h = harness()
+    h.composer.draft.begin('project')
+    h.composer.input.setDraft('保留正文')
+    if (kind === 'chat')
+      h.registry.items[0]!.kind = 'chat'
+    else if (kind === 'missing')
+      h.registry.items = []
+    else
+      h.fetchMock.mockRejectedValueOnce(new Error('offline'))
+    h.composer.input.submit()
+    await vi.waitFor(() => expect(h.composer.draft.getSnapshot().error).toBeTruthy())
+    expect(h.sessions.create).not.toHaveBeenCalled()
+    expect(h.composer.input.snapshot.draft).toBe('保留正文')
+    h.composer.input.dispose()
+    h.target.dispose()
+  })
+
+  it.each([true, false])('快速对话只接受本次分配的创建凭据，保留同一身份重试：%s', async (matches) => {
+    const h = harness()
+    h.fetchMock.mockImplementation(async (url, init) => {
+      if (url.endsWith('/ops')) {
+        const { creationId } = JSON.parse(init!.body as string)
+        h.registry.items[0] = { ...h.registry.items[0]!, kind: 'chat', creationId: matches ? creationId : 'another' }
+        return new Response(JSON.stringify({ chat: { workspaceId: 'project' } }))
+      }
+      return new Response(JSON.stringify(h.registry))
+    })
+    const create = h.sessions.create.getMockImplementation()!
+    h.sessions.create.mockImplementationOnce(async (input) => {
+      await create(input)
+      throw new Error('response lost')
+    })
+    h.composer.draft.begin()
+    h.composer.input.setDraft('retry')
+    h.composer.input.submit()
+    await vi.waitFor(() => expect(h.composer.draft.getSnapshot().error).toBeTruthy())
+    await vi.waitFor(() => expect(h.composer.input.snapshot.phase).toBe('plain'))
+    if (matches) {
+      h.composer.input.submit()
+      await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1))
+      expect(h.sessions.create).toHaveBeenCalledTimes(1)
+      expect(h.fetchMock.mock.calls.filter(([url]) => url.endsWith('/ops'))).toHaveLength(1)
+    }
+    else {
+      expect(h.sessions.create).not.toHaveBeenCalled()
+      expect(h.composer.draft.getSnapshot().error).toContain('凭据')
+    }
+    h.composer.input.dispose()
+    h.target.dispose()
+  })
   it('从侧栏丢弃草稿也清空输入和附件，释放附件但不删除真实实体', () => {
     const h = harness()
     h.composer.draft.begin('project', 'g')

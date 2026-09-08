@@ -188,4 +188,18 @@ describe('官方宿主集成', () => {
     expect(workspace.sessionIds).toEqual(order)
     expect(h.prompts.get('space:context')!.text({ agent: { session: { id: 'session' } } })).toBe('')
   })
+
+  it('独立对话及分叉读取同一官方工作区的简短目录提示', async () => {
+    const h = await host()
+    await h.request({ op: 'create-chat' })
+    const workspace = h.ctx.workspaceRegistry.list()[0]!
+    for (const id of ['session', 'fork']) {
+      h.headers.push({ id, cwd: workspace.path, createdAt: Date.now() })
+      await workspace.attachSession(id as Parameters<typeof workspace.attachSession>[0])
+    }
+    const prompt = (id: string) => h.prompts.get('space:context')!.text({ agent: { session: { id } } })
+    expect(prompt('session')).toBe(prompt('fork'))
+    expect(prompt('session')).toContain(workspace.path)
+    expect(prompt('session')).toContain('work/ 用于过程文件和工作材料，outputs/ 用于交付产物。')
+  })
 })

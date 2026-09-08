@@ -1305,9 +1305,9 @@ describe('侧栏交互', () => {
     expect(document.querySelector<HTMLInputElement>('[aria-label="名称"]')?.value).toBe('第二次')
   })
 
-  it('触屏和独立对话不因指针进入弹出项目浮层', async () => {
+  it('触屏不自动弹出浮层，独立对话悬停和菜单均能打开真实工作目录', async () => {
     vi.useFakeTimers()
-    const { item } = await mount()
+    const { item, workspaces } = await mount()
     const touch = new MouseEvent('pointerover', { bubbles: true })
     Object.defineProperty(touch, 'pointerType', { value: 'touch' })
     await act(async () => document.querySelector('.dsh-space-heading')!.dispatchEvent(touch))
@@ -1318,7 +1318,15 @@ describe('侧栏交互', () => {
     Object.defineProperty(mouse, 'pointerType', { value: 'mouse' })
     await act(async () => document.querySelector('.dsh-space-session-main')!.dispatchEvent(mouse))
     await act(async () => vi.advanceTimersByTimeAsync(500))
-    expect(document.querySelector('.dsh-space-details')).toBeNull()
+    expect(document.querySelector('.dsh-space-details')?.textContent).toContain(item.path)
+    await click('打开工作目录')
+    expect(workspaces.openPath).toHaveBeenLastCalledWith(item.path)
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    await click('对话分区操作')
+    await click('管理对话目录')
+    expect(Array.from(document.querySelectorAll('dialog button')).some(node => node.getAttribute('aria-label')?.includes('中新建会话'))).toBe(false)
+    await click(`打开 ${item.title} 的工作目录`)
+    expect(workspaces.openPath).toHaveBeenLastCalledWith(item.path)
   })
 
   it('工作区改名失败保留草稿，不锁定模式或其他操作', async () => {

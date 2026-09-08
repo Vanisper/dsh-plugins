@@ -743,6 +743,7 @@ export function createSidebar(
       const index = peers.indexOf(session.id)
       return [
         pinAction(pin),
+        ...(item ? [{ label: '打开工作目录', icon: 'open' as const, group: 'location', run: () => perform(() => workspaces.openPath(item.path)) }] : []),
         {
           label: '重命名',
           icon: 'edit',
@@ -801,25 +802,27 @@ export function createSidebar(
         group: 'location',
         run: () => perform(() => workspaces.openPath(item.path)),
       },
-      ...(isPinned({ kind: 'workspace', id: item.workspaceId })
-        ? pinnedMoves({ kind: 'workspace', id: item.workspaceId }).map(action => ({ ...action, group: 'order' }))
-        : ([-1, 1] as const).map(direction => ({
-            label: direction === -1 ? '上移' : '下移',
-            group: 'order',
-            icon: direction === -1 ? ('up' as const) : ('down' as const),
-            disabled:
+      ...(item.kind === 'chat'
+        ? []
+        : isPinned({ kind: 'workspace', id: item.workspaceId })
+          ? pinnedMoves({ kind: 'workspace', id: item.workspaceId }).map(action => ({ ...action, group: 'order' }))
+          : ([-1, 1] as const).map(direction => ({
+              label: direction === -1 ? '上移' : '下移',
+              group: 'order',
+              icon: direction === -1 ? ('up' as const) : ('down' as const),
+              disabled:
           moveAnchor(workspacePeers(item), item.workspaceId, direction)
           === null,
-            run: () => {
-              const anchor = moveAnchor(
-                workspacePeers(item),
-                item.workspaceId,
-                direction,
-              )
-              if (anchor !== null)
-                perform(() => workspaces.insertBefore(item.workspaceId, anchor))
-            },
-          }))),
+              run: () => {
+                const anchor = moveAnchor(
+                  workspacePeers(item),
+                  item.workspaceId,
+                  direction,
+                )
+                if (anchor !== null)
+                  perform(() => workspaces.insertBefore(item.workspaceId, anchor))
+              },
+            }))),
       ...(item.kind !== 'chat'
         ? [
             {
@@ -932,7 +935,7 @@ export function createSidebar(
           },
           'onPointerLeave': stopInfoTimer,
           'onPointerEnter': (event: PointerEvent) => {
-            if (event.pointerType === 'mouse' && item && item.kind !== 'chat')
+            if (event.pointerType === 'mouse' && item)
               showInfo({ kind: 'session', id: session.id }, false, true)
           },
         },
@@ -1382,13 +1385,10 @@ export function createSidebar(
             { key: item.workspaceId, className: 'dsh-space-directory-row' },
             e('div', { className: 'dsh-space-heading-text' }, e('strong', null, item.title), e('code', null, item.path)),
             e(IconButton, {
-              icon: 'chat',
-              label: `在 ${item.title} 中新建会话`,
+              icon: 'open',
+              label: `打开 ${item.title} 的工作目录`,
               disabled: busy,
-              onClick: () => {
-                close()
-                beginDraft(item.workspaceId)
-              },
+              onClick: () => perform(() => workspaces.openPath(item.path)),
             }),
             e(Menu, { label: `${item.title} 工作区操作`, actions: workspaceActions(item), disabled: busy }),
           )),
@@ -1756,12 +1756,12 @@ export function createSidebar(
               e(Icon, { name: 'external', size: 14 }),
             )
           : null,
-        session && item && item.kind !== 'chat'
+        session && item
           ? e(
               'button',
-              { type: 'button', className: 'dsh-space-detail-path', onClick: () => showInfo({ kind: 'workspace', id: item.workspaceId }) },
+              { 'type': 'button', 'className': 'dsh-space-detail-path', 'aria-label': item.kind === 'chat' ? '打开工作目录' : undefined, 'onClick': () => item.kind === 'chat' ? perform(() => workspaces.openPath(item.path)) : showInfo({ kind: 'workspace', id: item.workspaceId }) },
               e(Icon, { name: item.kind === 'space' ? 'layers' : 'folder' }),
-              item.title,
+              item.kind === 'chat' ? pathText(item.path) : item.title,
             )
           : null,
         !session && item?.kind === 'space'

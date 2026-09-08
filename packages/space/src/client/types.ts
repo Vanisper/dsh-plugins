@@ -7,6 +7,7 @@ export interface MemberItem {
 }
 
 export interface RegistryItem {
+  creationId?: string
   kind: 'plain' | 'space' | 'chat'
   workspaceId: string
   path: string

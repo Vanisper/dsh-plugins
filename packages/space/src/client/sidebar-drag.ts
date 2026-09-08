@@ -38,6 +38,7 @@ export function createSidebarDrag(scrollElement: () => HTMLElement | null): Side
   let state: DragState = { previews: [] }
   let sourceElement: HTMLElement | undefined
   let previewElement: HTMLElement | undefined
+  let imageFrame: number | undefined
   let previewTimer: ReturnType<typeof setTimeout> | undefined
   let previewKey: string | undefined
   let frame: number | undefined
@@ -56,7 +57,10 @@ export function createSidebarDrag(scrollElement: () => HTMLElement | null): Side
     clearPreview()
     if (frame !== undefined)
       cancelAnimationFrame(frame)
+    if (imageFrame !== undefined)
+      cancelAnimationFrame(imageFrame)
     frame = undefined
+    imageFrame = undefined
     point = undefined
     sourceElement?.removeAttribute('data-drag-source')
     sourceElement = undefined
@@ -65,12 +69,6 @@ export function createSidebarDrag(scrollElement: () => HTMLElement | null): Side
     document.body.removeAttribute('data-dsh-space-dragging')
     if (state.source)
       publish({ previews: [] })
-  }
-  const movePreview = (event: DragEvent): void => {
-    if (!previewElement)
-      return
-    previewElement.style.left = `${Math.max(8, Math.min(event.clientX + 12, window.innerWidth - previewElement.offsetWidth - 8))}px`
-    previewElement.style.top = `${Math.max(8, Math.min(event.clientY + 12, window.innerHeight - previewElement.offsetHeight - 8))}px`
   }
   const scroll = (): void => {
     frame = undefined
@@ -116,12 +114,25 @@ export function createSidebarDrag(scrollElement: () => HTMLElement | null): Side
       label.textContent = sourceElement.querySelector('.dsh-space-session-title,.dsh-space-title')?.textContent ?? sourceElement.getAttribute('aria-label') ?? sourceElement.textContent
       previewElement.append(icon, label)
       document.body.append(previewElement)
-      movePreview(event)
+      const sourceRect = sourceElement.getBoundingClientRect()
+      const imageRect = previewElement.getBoundingClientRect()
+      const hotspot = (position: number, start: number, sourceSize: number, imageSize: number): number => Math.round(Math.max(0, Math.min(imageSize - 1, sourceSize > 0 ? (position - start) / sourceSize * imageSize : imageSize / 2)))
+      const x = hotspot(event.clientX, sourceRect.left, sourceRect.width, imageRect.width)
+      const y = hotspot(event.clientY, sourceRect.top, sourceRect.height, imageRect.height)
+      previewElement.style.left = `${Math.max(0, Math.min(event.clientX - x, window.innerWidth - imageRect.width))}px`
+      previewElement.style.top = `${Math.max(0, Math.min(event.clientY - y, window.innerHeight - imageRect.height))}px`
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.clearData?.()
         event.dataTransfer.setData('text/plain', source.kind === 'pin' ? source.pin.id : source.id)
-        event.dataTransfer.setDragImage?.(document.createElement('canvas'), 0, 0)
+        event.dataTransfer.setDragImage?.(previewElement, x, y)
       }
+      // 浏览器在 dragstart 结束后取样；下一帧移除源节点，只保留原生自定义拖影
+      imageFrame = requestAnimationFrame(() => {
+        previewElement?.remove()
+        previewElement = undefined
+        imageFrame = undefined
+      })
       publish({ source, previews: [] })
     },
     over(target, event, preview) {
@@ -194,7 +205,6 @@ export function createSidebarDrag(scrollElement: () => HTMLElement | null): Side
       document.addEventListener('keydown', key, true)
       document.addEventListener('dragend', reset, true)
       document.addEventListener('drop', dropped)
-      document.addEventListener('dragover', movePreview, true)
       document.addEventListener('dragleave', outside)
       window.addEventListener('blur', reset)
       return () => {
@@ -202,7 +212,6 @@ export function createSidebarDrag(scrollElement: () => HTMLElement | null): Side
         document.removeEventListener('keydown', key, true)
         document.removeEventListener('dragend', reset, true)
         document.removeEventListener('drop', dropped)
-        document.removeEventListener('dragover', movePreview, true)
         document.removeEventListener('dragleave', outside)
         window.removeEventListener('blur', reset)
       }

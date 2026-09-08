@@ -9,6 +9,7 @@ async function _sidebarDragRegression(page) {
   const key = 'dsh-space.sidebar.layout'
   const previous = await page.evaluate(key => localStorage.getItem(key), key)
   const viewport = page.viewportSize()
+  let nativePreviews = 0
   const projects = before.items.filter(item => item.kind === 'space' && item.sessionIds.length)
   const sessionId = projects[0].sessionIds[0]
   const otherId = projects[1].sessionIds[0]
@@ -27,6 +28,9 @@ async function _sidebarDragRegression(page) {
     await page.mouse.move(box.x + Math.min(100, box.width / 2), box.y + box.height * fraction, { steps: 12 })
   }
   const start = async (source, target, fraction = 0.25) => {
+    await page.evaluate(() => {
+      window.__dshSpaceDragQa.image = undefined
+    })
     await source.scrollIntoViewIfNeeded()
     const box = await source.boundingBox()
     await page.mouse.move(box.x + 40, box.y + box.height / 2)
@@ -34,6 +38,14 @@ async function _sidebarDragRegression(page) {
     await page.mouse.move(box.x + 48, box.y + box.height / 2 + 8, { steps: 3 })
     await move(target, fraction)
     await page.waitForFunction(() => document.body.hasAttribute('data-dsh-space-dragging'))
+    const image = await page.evaluate(() => window.__dshSpaceDragQa.image)
+    if (!image?.connected || image.tag !== 'DIV' || image.width <= 0 || image.height <= 0 || !image.text
+      || image.x < 0 || image.x >= image.width || image.y < 0 || image.y >= image.height
+      || !image.types.includes('text/plain') || image.types.includes('text/uri-list')) {
+      throw new Error(`未给原生拖动提供有效标题预览与热点：${JSON.stringify(image)}`)
+    }
+    await page.waitForFunction(() => !document.querySelector('.dsh-space-drag-preview'))
+    nativePreviews++
   }
   const cancel = async () => {
     await page.keyboard.press('Escape')
@@ -42,6 +54,15 @@ async function _sidebarDragRegression(page) {
   }
   const layout = () => page.evaluate(key => JSON.parse(localStorage.getItem(key)), key)
   try {
+    await page.evaluate(() => {
+      const original = DataTransfer.prototype.setDragImage
+      window.__dshSpaceDragQa = { original, image: undefined }
+      DataTransfer.prototype.setDragImage = function (image, x, y) {
+        const rect = image.getBoundingClientRect()
+        window.__dshSpaceDragQa.image = { connected: image.isConnected, tag: image.tagName, width: rect.width, height: rect.height, x, y, text: image.textContent, types: Array.from(this.types) }
+        return original.call(this, image, x, y)
+      }
+    })
     await page.setViewportSize({ width: 1280, height: 900 })
     await fixture({})
     await page.waitForFunction(() => {
@@ -53,9 +74,9 @@ async function _sidebarDragRegression(page) {
     await start(source, target)
     if (await page.locator('.drop-before,.drop-after').count())
       throw new Error('相邻原位不应显示引导线')
-    await page.locator('.dsh-space-drag-preview').waitFor()
     await move(target, 0.85)
     await page.locator('.dsh-space-group.drop-after').waitFor()
+    // 网页截图记录落点；系统持有的原生拖影不包含在 Playwright 截图中
     await page.screenshot({ path: 'output/playwright/sidebar-drag-project-after.png' })
     await cancel()
     if (await page.locator('.drop-before,.drop-after,.drop-assign,.dsh-space-drag-preview').count())
@@ -110,10 +131,16 @@ async function _sidebarDragRegression(page) {
     const after = await page.evaluate(async () => (await fetch('/api/dsh-space/registry')).json())
     if (JSON.stringify(before.items) !== JSON.stringify(after.items))
       throw new Error('展示拖动或取消不应修改核心工作区与会话')
-    return { noOpHidden: true, sameGroupHeaderIgnored: true, projectEdges: true, previewCanceled: true, assigned: true, groupReordered: true, mixedPins: true, scrolled, coreUnchanged: true }
+    return { nativePreviews, noDomDuplicate: true, noOpHidden: true, sameGroupHeaderIgnored: true, projectEdges: true, previewCanceled: true, assigned: true, groupReordered: true, mixedPins: true, scrolled, coreUnchanged: true }
   }
   finally {
     await cancel()
+    await page.evaluate(() => {
+      if (window.__dshSpaceDragQa) {
+        DataTransfer.prototype.setDragImage = window.__dshSpaceDragQa.original
+        delete window.__dshSpaceDragQa
+      }
+    })
     await page.evaluate(({ key, previous }) => {
       if (previous === null)
         localStorage.removeItem(key)

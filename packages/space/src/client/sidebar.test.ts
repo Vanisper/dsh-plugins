@@ -448,14 +448,18 @@ it('浮层路径按目录分段，保留中文、连字符和 Windows 分隔符'
 })
 
 describe('侧栏交互', () => {
-  it.each(['移除展示分组', '移除附加描述', '移除工作区'])('弹窗默认聚焦关闭，但不因自动聚焦显示提示：%s', async (title) => {
+  it.each(['移除展示分组', '转为普通工作区', '移除工作区'])('弹窗默认聚焦关闭，但不因自动聚焦显示提示：%s', async (title) => {
     vi.useFakeTimers()
     if (title === '移除展示分组') {
       const store = createLayoutStore()
       store.saveGroup({ id: 'g', title: '计划', color: 'gray', collapsed: false }, true)
       store.setView('groups')
     }
-    await mount()
+    const { item } = await mount()
+    if (title === '转为普通工作区') {
+      await registry({ ...fixture.registry!, items: [{ ...item, kind: 'chat' }] })
+      await click('管理对话目录')
+    }
     await click(title === '移除展示分组' ? '移除分组' : title)
     const close = button('关闭')
     expect(document.activeElement).toBe(close)
@@ -1597,6 +1601,72 @@ describe('侧栏交互', () => {
     expect(mode.getSnapshot().blocked).toBe(false)
   })
 
+  it('成员元数据字段隐藏后切换链接，保存仍完整保留既有值', async () => {
+    const { item } = await mount()
+    await registry({ ...fixture.registry!, items: [{ ...item, members: [{ path: '/a', mode: 'link', linkName: 'custom', title: '旧名称', description: '旧说明' }] }] })
+    await click('编辑工作区')
+    expect(document.querySelector('textarea')).toBeNull()
+    expect(document.querySelector('[aria-label="/a 显示名称"]')).toBeNull()
+    expect(document.querySelector('.dsh-space-member-primary')).toBeNull()
+    await act(async () => document.querySelector<HTMLInputElement>('[aria-label="为 旧名称 创建链接"]')!.click())
+    await act(async () => document.querySelector<HTMLInputElement>('[aria-label="为 旧名称 创建链接"]')!.click())
+    expect(document.querySelector<HTMLInputElement>('[aria-label="/a 链接名称"]')!.value).toBe('custom')
+    await act(async () => document.querySelector<HTMLInputElement>('[aria-label="为 旧名称 创建链接"]')!.click())
+    await click('保存')
+    expect(operation).toHaveBeenCalledWith(expect.objectContaining({ members: [{ path: '/a', mode: 'reference', linkName: undefined, title: '旧名称', description: '旧说明' }] }))
+  })
+
+  it('空间开关保留草稿，关闭后 Enter 不隐式降级，保存带上原版本', async () => {
+    await mount()
+    await click('编辑工作区')
+    await input('成员目录路径', '/c')
+    await click('添加路径')
+    const toggle = () => act(async () => document.querySelector<HTMLInputElement>('[aria-label="作为空间"]')!.click())
+    await toggle()
+    expect(document.querySelector('.dsh-space-change-warning')?.textContent).toContain('2 项成员配置')
+    await toggle()
+    expect(document.querySelectorAll('[data-member-path]')).toHaveLength(3)
+    await toggle()
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    await act(async () => document.querySelector('[aria-label="工作区名称"]')!.dispatchEvent(enter))
+    expect(enter.defaultPrevented).toBe(true)
+    expect(operation).not.toHaveBeenCalled()
+    operation.mockImplementationOnce(async () => {
+      const item = fixture.registry!.items[0]!
+      fixture.registry = { ...fixture.registry!, items: [{ ...item, kind: 'plain', members: undefined, primary: undefined, revision: undefined }] }
+      return { dropped: item.workspaceId }
+    })
+    await click('保存')
+    expect(operation).toHaveBeenCalledWith({ op: 'drop-space', workspace: 'w', expectedRevision: 'v1' })
+    expect(document.querySelector('dialog')).toBeNull()
+  })
+
+  it('取消移除确认返回完整编辑草稿', async () => {
+    await mount()
+    await click('编辑工作区')
+    await input('工作区名称', '待保存')
+    await input('成员目录路径', '/c')
+    await click('添加路径')
+    await click('移除工作区')
+    expect(document.querySelector('dialog.compact')).not.toBeNull()
+    await click('取消')
+    expect(document.querySelector('dialog')?.getAttribute('aria-label')).toBe('编辑工作区')
+    expect(document.querySelector<HTMLInputElement>('[aria-label="工作区名称"]')?.value).toBe('待保存')
+    expect(document.querySelectorAll('[data-member-path]')).toHaveLength(3)
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('选择普通目录预填名称，重复登记不会向已有工作区创建会话', async () => {
+    const { item, workspaces, beginDraft } = await mount()
+    vi.mocked(workspaces.create).mockResolvedValue(item)
+    await click('添加目录工作区')
+    await click('选择目录')
+    expect(document.querySelector<HTMLInputElement>('[aria-label="工作区名称"]')?.value).toBe('picked')
+    await click('添加')
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('此目录已登记')
+    expect(beginDraft).not.toHaveBeenCalled()
+  })
+
   it.each(['名称', '主成员'] as const)('首次编辑%s 不使用弹窗显示前的成员坐标', async (change) => {
     await mount()
     vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: false } as MediaQueryList)
@@ -1611,16 +1681,16 @@ describe('侧栏交互', () => {
     for (const row of document.querySelectorAll<HTMLElement>('[data-member-path]'))
       row.animate = animate
     if (change === '名称') {
-      await input('/a 显示名称', '首次输入')
+      await input('工作区名称', '首次输入')
       expect(animate).not.toHaveBeenCalled()
-      await input('/a 显示名称', '再次输入')
+      await input('工作区名称', '再次输入')
       expect(animate).not.toHaveBeenCalled()
     }
     else {
       await act(async () => document.querySelector<HTMLInputElement>('[aria-label="将 b 设为主要"]')!.click())
       expect(animate.mock.calls.map(([frames]) => frames[0].transform)).toEqual(['translateY(100px)', 'translateY(-100px)'])
       animate.mockClear()
-      await input('/b 显示名称', '切换主要后的输入')
+      await input('工作区名称', '切换主要后的输入')
       expect(animate).not.toHaveBeenCalled()
     }
   })
@@ -1651,7 +1721,7 @@ describe('侧栏交互', () => {
     expect(document.querySelector('.dsh-space-workspace-icon.space')).toBeNull()
     expect(document.querySelector('.dsh-space-heading')?.getAttribute('aria-description')).toBeNull()
     await click('编辑工作区')
-    expect(document.querySelector('.dsh-space-member-list')).toBeNull()
+    expect(document.querySelector('.dsh-space-member-list')!.closest('[hidden]')).not.toBeNull()
     await act(async () => document.querySelector<HTMLInputElement>('.dsh-space-enhance input')!.click())
     await input('成员目录路径', '/c')
     await click('添加路径')
@@ -1830,6 +1900,7 @@ describe('侧栏交互', () => {
       finish = resolve
     }))
     await click('编辑工作区')
+    const picker = button('添加成员目录')
     await click('添加成员目录')
     expect(document.querySelector('fieldset')?.disabled).toBe(true)
     expect(document.querySelector('dialog')?.getAttribute('closedby')).toBe('none')
@@ -1837,6 +1908,7 @@ describe('侧栏交互', () => {
     expect(document.querySelector('dialog')).not.toBeNull()
     expect(operation).not.toHaveBeenCalled()
     await act(async () => finish('/picked'))
+    expect(button('添加成员目录')).toBe(picker)
     expect(document.querySelectorAll('[data-member-path]')).toHaveLength(3)
     expect(button('保存').disabled).toBe(false)
     expect(document.querySelector('dialog')?.getAttribute('closedby')).toBe('closerequest')

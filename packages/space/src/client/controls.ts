@@ -110,6 +110,9 @@ interface MenuProps {
   badge?: IconName
 }
 interface ModalProps {
+  workspace?: boolean
+  compact?: boolean
+  explicitSubmit?: boolean
   title: string
   busy: boolean
   error?: string
@@ -416,6 +419,9 @@ export function createControls(React: ReactLike): Controls {
     cancelLabel,
     danger,
     secondary,
+    compact,
+    workspace,
+    explicitSubmit,
   }: ModalProps): unknown {
     const dialog = React.useRef<HTMLDialogElement | null>(null)
     const ime = React.useMemo(createImeGuard, [])
@@ -440,7 +446,7 @@ export function createControls(React: ReactLike): Controls {
       'dialog',
       {
         'ref': dialog,
-        'className': 'dsh-space-dialog',
+        'className': `dsh-space-dialog${compact ? ' compact' : ''}${workspace ? ' workspace-editor' : ''}`,
         'aria-label': title,
         'aria-busy': busy,
         'closedby': busy ? 'none' : 'closerequest',
@@ -456,8 +462,8 @@ export function createControls(React: ReactLike): Controls {
           className: 'dsh-space-form',
           onCompositionStart: ime.start,
           onCompositionEnd: ime.end,
-          onKeyDown: (event: { key: string, nativeEvent: KeyboardEvent, preventDefault: () => void }) => {
-            if (event.key === 'Enter' && ime.active(event.nativeEvent))
+          onKeyDown: (event: { key: string, target: HTMLElement, nativeEvent: KeyboardEvent, preventDefault: () => void }) => {
+            if (event.key === 'Enter' && (ime.active(event.nativeEvent) || (explicitSubmit && event.target.tagName !== 'BUTTON')))
               event.preventDefault()
           },
           onSubmit: (event: Event) => {

@@ -25,8 +25,8 @@ export async function prepareMemberDraft(inputs: MemberInput[], primary?: string
     const old = existing.find(member => member.path === input.path)
     const path = old?.path ?? await existingDirectory(input.path)
     const member = memberData(input, path)
-    if (old && (old.mode !== member.mode || old.linkName !== member.linkName))
-      throw new Error('已有成员的接入方式不能直接更改，请先移除并保存，再重新添加')
+    if (member.mode === 'link' && old?.mode !== 'link')
+      await existingDirectory(path)
     members.push(member)
   }
   assertMemberReferences(members)

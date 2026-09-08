@@ -21,12 +21,10 @@ export function createMemberEditor(
   return function MemberEditor({
     draft,
     setDraft,
-    original = [],
     onPick,
   }: {
     draft: MemberDraft
     setDraft: (next: MemberDraft) => void
-    original?: MemberItem[]
     onPick: (accept: (path: string) => void) => void
   }): unknown {
     const [path, setPath] = React.useState('')
@@ -34,6 +32,7 @@ export function createMemberEditor(
     const ime = React.useMemo(createImeGuard, [])
     const list = React.useRef<HTMLDivElement | null>(null)
     const positions = React.useRef(new Map<string, number>())
+    const linkNames = React.useRef(new Map(draft.members.map(member => [member.path, member.linkName])))
     const members = [...draft.members].sort(
       (a, b) =>
         Number(b.path === draft.primary) - Number(a.path === draft.primary),
@@ -135,18 +134,20 @@ export function createMemberEditor(
                 ),
                 e('small', { title: member.path }, member.path),
               ),
-              e('input', {
-                'type': 'radio',
-                'name': 'space-primary-member',
-                'className': 'dsh-space-member-primary',
-                'aria-label':
+              members.length > 1
+                ? e('input', {
+                    'type': 'radio',
+                    'name': 'space-primary-member',
+                    'className': 'dsh-space-member-primary',
+                    'aria-label':
                   member.path === draft.primary
                     ? '当前主成员'
                     : `将 ${memberLabel(member)} 设为主要`,
-                ...tooltipProps(member.path === draft.primary ? '当前主成员' : '设为主要'),
-                'checked': member.path === draft.primary,
-                'onChange': () => selectPrimary(member.path),
-              }),
+                    ...tooltipProps(member.path === draft.primary ? '当前主成员' : '设为主要'),
+                    'checked': member.path === draft.primary,
+                    'onChange': () => selectPrimary(member.path),
+                  })
+                : null,
               e(IconButton, {
                 icon: 'close',
                 label: `移除成员 ${memberLabel(member)}`,
@@ -164,85 +165,34 @@ export function createMemberEditor(
                 },
               }),
             ),
-            e(
-              'details',
-              null,
-              e('summary', null, '名称、说明与接入方式'),
-              e(
-                'div',
-                { className: 'dsh-space-member-fields' },
-                e(
-                  'label',
-                  null,
-                  '显示名称',
-                  e('input', {
-                    'aria-label': `${member.path} 显示名称`,
-                    'value': member.title ?? '',
-                    'placeholder': member.path.split(/[\\/]/).at(-1),
-                    'onChange': (event: { target: HTMLInputElement }) =>
-                      patch(member, { title: event.target.value }),
-                  }),
-                ),
-                e(
-                  'label',
-                  null,
-                  '接入方式',
-                  original.some(row => row.path === member.path)
-                    ? e('output', null, member.mode === 'reference' ? '引用' : '符号链接')
-                    : e(
-                        'select',
-                        {
-                          value: member.mode,
-                          onChange: (event: { target: HTMLSelectElement }) =>
-                            patch(member, {
-                              mode: event.target.value as MemberItem['mode'],
-                              linkName: undefined,
-                            }),
-                        },
-                        e('option', { value: 'reference' }, '引用'),
-                        e('option', { value: 'link' }, '符号链接'),
-                      ),
-                ),
-                member.mode === 'link'
-                  ? e(
-                      'label',
-                      { className: 'full' },
-                      '链接名称',
-                      original.some(row => row.path === member.path)
-                        ? e('output', null, member.linkName)
-                        : e('input', {
-                            value: member.linkName ?? '',
-                            placeholder: '默认使用目录名称',
-                            onChange: (event: { target: HTMLInputElement }) =>
-                              patch(member, {
-                                linkName: event.target.value || undefined,
-                              }),
-                          }),
-                    )
-                  : null,
-                e(
-                  'label',
-                  { className: 'full' },
-                  '说明',
-                  e('textarea', {
-                    value: member.description ?? '',
-                    onChange: (event: { target: HTMLTextAreaElement }) =>
-                      patch(member, { description: event.target.value }),
-                  }),
-                ),
-              ),
-            ),
+            e('div', { className: 'dsh-space-member-options' }, e('label', { className: 'dsh-space-check', ...tooltipProps('在工作区的 projects 目录中创建符号链接') }, e('input', {
+              'type': 'checkbox',
+              'aria-label': `为 ${memberLabel(member)} 创建链接`,
+              'checked': member.mode === 'link',
+              'onChange': (event: { target: HTMLInputElement }) => patch(member, {
+                mode: event.target.checked ? 'link' : 'reference',
+                linkName: event.target.checked ? linkNames.current.get(member.path) : undefined,
+              }),
+            }), '创建链接'), member.mode === 'link'
+              ? e('label', { className: 'dsh-space-link-name' }, e('span', null, 'projects/'), e('input', {
+                  'aria-label': `${member.path} 链接名称`,
+                  'value': member.linkName ?? '',
+                  'placeholder': member.path.split(/[\\/]/).filter(Boolean).at(-1),
+                  'onChange': (event: { target: HTMLInputElement }) => {
+                    const name = event.target.value || undefined
+                    linkNames.current.set(member.path, name)
+                    patch(member, { linkName: name })
+                  },
+                }))
+              : null),
           ),
         ),
-      ),
-      draft.members.length === 0
-        ? e('p', { className: 'dsh-space-muted' }, '尚无成员目录')
-        : null,
-      e(
-        'button',
-        { type: 'button', className: 'dsh-space-add-member', onClick: () => onPick(add) },
-        e(Icon, { name: 'folderPlus' }),
-        '添加成员目录',
+        e(
+          'button',
+          { key: 'add-member', type: 'button', className: `dsh-space-add-member${members.length ? '' : ' empty'}`, onClick: () => onPick(add) },
+          e(Icon, { name: 'folderPlus' }),
+          '添加成员目录',
+        ),
       ),
       e('details', { className: 'dsh-space-member-manual' }, e('summary', null, '输入目录路径'), e(
         'div',

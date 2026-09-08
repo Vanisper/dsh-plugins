@@ -1,7 +1,7 @@
 import type { SpaceStore } from '../store/settings.ts'
 import type { WorkspaceService } from '../workspace/core.ts'
 import type { SpaceSettings, WorkspaceView } from './types.ts'
-import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
@@ -353,6 +353,58 @@ describe('operation queue', () => {
 })
 
 describe('update member', () => {
+  it('已有成员双向切换链接，保留成员元数据和核心归属', async () => {
+    const root = await temporaryRoot()
+    const source = await temporaryRoot()
+    const store = fakeStore(root)
+    const workspaces = fakeWorkspaces([{ workspaceId: 'w', path: root, title: '项目', sessionIds: ['s'] }])
+    const operations = createSpaceOperations(store, workspaces)
+    await operations.execute({ op: 'enhance-space', workspace: 'w', members: [{ path: source, title: '名称', description: '说明' }] })
+    const save = (mode: 'link' | 'reference') => operations.execute({ op: 'save-members', workspace: 'w', members: [{ ...store.value.spaces[0]!.members[0]!, mode, linkName: mode === 'link' ? 'source' : undefined }], expectedRevision: spaceRevision(store.value.spaces[0]!) })
+    await save('link')
+    expect(await canonicalize(join(root, 'projects/source'))).toBe(await canonicalize(source))
+    store.failNextReplace = true
+    await expect(save('reference')).rejects.toThrow('settings write failed')
+    expect(await lstat(join(root, 'projects/source')).then(stat => stat.isSymbolicLink())).toBe(true)
+    expect(store.value.spaces[0]!.members[0]!.mode).toBe('link')
+    await save('reference')
+    await expect(lstat(join(root, 'projects/source'))).rejects.toThrow()
+    expect(store.value.spaces[0]).toMatchObject({ primary: await canonicalize(source), members: [{ mode: 'reference', title: '名称', description: '说明' }] })
+    expect(workspaces.rows[0]!.sessionIds).toEqual(['s'])
+  })
+
+  it('链接位置被替换时拒绝关闭，不改描述或覆盖文件，修复后可重试', async () => {
+    const root = await temporaryRoot()
+    const source = await temporaryRoot()
+    const store = fakeStore(root)
+    const operations = createSpaceOperations(store, fakeWorkspaces([{ workspaceId: 'w', path: root, title: '项目', sessionIds: [] }]))
+    await operations.execute({ op: 'enhance-space', workspace: 'w', members: [{ path: source, mode: 'link', linkName: 'source' }] })
+    const target = join(root, 'projects/source')
+    await rm(target)
+    await writeFile(target, '保留')
+    const op = { op: 'save-members' as const, workspace: 'w', members: [{ path: source, mode: 'reference' as const }], expectedRevision: spaceRevision(store.value.spaces[0]!) }
+    await expect(operations.execute(op)).rejects.toThrow('链接位置')
+    expect(await readFile(target, 'utf8')).toBe('保留')
+    expect(store.value.spaces[0]!.members[0]!.mode).toBe('link')
+    await rm(target)
+    await operations.execute(op)
+    expect(store.value.spaces[0]!.members[0]!.mode).toBe('reference')
+  })
+
+  it('降级在服务端检查版本，保留链接、源目录与核心工作区', async () => {
+    const root = await temporaryRoot()
+    const source = await temporaryRoot()
+    const store = fakeStore(root)
+    const workspaces = fakeWorkspaces([{ workspaceId: 'w', path: root, title: '项目', sessionIds: ['s'] }])
+    const operations = createSpaceOperations(store, workspaces)
+    await operations.execute({ op: 'enhance-space', workspace: 'w', members: [{ path: source, mode: 'link', linkName: 'source' }] })
+    await expect(operations.execute({ op: 'drop-space', workspace: 'w', expectedRevision: 'old' })).rejects.toThrow('其他位置修改')
+    await operations.execute({ op: 'drop-space', workspace: 'w', expectedRevision: spaceRevision(store.value.spaces[0]!) })
+    expect(store.value.spaces).toEqual([])
+    expect(await canonicalize(join(root, 'projects/source'))).toBe(await canonicalize(source))
+    expect(workspaces.rows[0]!.sessionIds).toEqual(['s'])
+  })
+
   it('多成员创建只写入一次，并以选定成员为主成员', async () => {
     const root = await temporaryRoot()
     const paths = [join(root, 'a'), join(root, 'b')]

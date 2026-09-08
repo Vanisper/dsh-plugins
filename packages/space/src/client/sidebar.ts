@@ -40,6 +40,7 @@ import { moveBefore, sessionOrderMoves } from './session-order.ts'
 import { archivedEntries, projectGroups } from './views.ts'
 import { waitFor } from './wait.ts'
 import { createWorkspaceEdit } from './workspace-edit.ts'
+import { createWorkspaceFields } from './workspace-fields.ts'
 
 type Dialog
   = | { type: 'create-space' }
@@ -47,7 +48,7 @@ type Dialog
     | { type: 'invalid' }
     | { type: 'drop-invalid', kind: 'space' | 'chat', workspaceId: string }
     | { type: 'rename', target: Pin, title: string }
-    | { type: 'delete-workspace', item: RegistryItem }
+    | { type: 'delete-workspace', item: RegistryItem, returnToEditor?: boolean }
     | { type: 'drop-description', item: RegistryItem }
     | { type: 'edit-workspace', item: RegistryItem }
     | { type: 'chat-directories' }
@@ -133,6 +134,7 @@ export function createSidebar(
   const Feedback = createFeedback(React, primitives.Toast)
   const RenameDialog = createRenameDialog(React, primitives)
   const MemberEditor = createMemberEditor(React)
+  const WorkspaceFields = createWorkspaceFields(React)
   const Details = createDetails(React)
   const GroupEditor = createGroupEditor(React)
   const ArchiveView = createArchiveView(React)
@@ -163,6 +165,7 @@ export function createSidebar(
     >(undefined)
     const [dialog, setDialog] = React.useState<Dialog | null>(null)
     const [text, setText] = React.useState('')
+    const [directoryPath, setDirectoryPath] = React.useState('')
     const [members, setMembers] = React.useState<MemberDraft>({ members: [] })
     const [enhance, setEnhance] = React.useState(false)
     const workspaceEdit = React.useRef<WorkspaceEdit | undefined>(undefined)
@@ -518,6 +521,8 @@ export function createSidebar(
             : '',
       )
       setMembers({ members: [] })
+      setDirectoryPath('')
+      setEnhance(false)
       workspaceEdit.current = undefined
       if (next.type === 'edit-workspace')
         loadWorkspaceEditor(next.item)
@@ -526,7 +531,10 @@ export function createSidebar(
     }
     const close = (): void => {
       if (!busyRef.current) {
-        setDialog(null)
+        if (dialog?.type === 'delete-workspace' && dialog.returnToEditor && !descriptionRemoved.current)
+          setDialog({ type: 'edit-workspace', item: dialog.item })
+        else
+          setDialog(null)
         setError(undefined)
       }
     }
@@ -633,12 +641,6 @@ export function createSidebar(
           onCancel: closeGroupEditor,
         })
       : null
-    const runOp = (body: Record<string, unknown>, success: string): void =>
-      perform(async () => {
-        await runOperation(body)
-        refresh()
-        setNotice(success)
-      })
     const isPinned = (pin: Pin): boolean => layout.pins.some(value => value.kind === pin.kind && value.id === pin.id)
     const pinAction = (pin: Pin): MenuAction => ({
       label: isPinned(pin) ? '取消置顶' : '置顶',
@@ -818,21 +820,6 @@ export function createSidebar(
                 perform(() => workspaces.insertBefore(item.workspaceId, anchor))
             },
           }))),
-      ...(item.kind === 'plain'
-        ? [
-            {
-              label: '增强为空间',
-              group: 'edit',
-              icon: 'layers' as const,
-              disabled: !registry,
-              run: () =>
-                runOp(
-                  { op: 'enhance-space', workspace: item.workspaceId },
-                  '已增强为空间',
-                ),
-            },
-          ]
-        : []),
       ...(item.kind !== 'chat'
         ? [
             {
@@ -843,10 +830,10 @@ export function createSidebar(
             },
           ]
         : []),
-      ...(item.kind !== 'plain'
+      ...(item.kind === 'chat'
         ? [
             {
-              label: '移除附加描述',
+              label: '转为普通工作区',
               group: 'remove',
               icon: 'folder' as const,
               run: () => begin({ type: 'drop-description', item }),
@@ -1362,7 +1349,7 @@ export function createSidebar(
     const renderDialog = (): unknown => {
       if (!dialog)
         return null
-      const props = { busy, error, onClose: close }
+      const props = { key: dialog.type, busy, error, onClose: close }
       if (dialog.type === 'discard-draft') {
         return e(Modal, { ...props, title: '丢弃新会话草稿', submitLabel: '丢弃草稿', busy: busy || draftState.phase === 'creating', onSubmit: () => {
           if (discardDraft())
@@ -1414,80 +1401,62 @@ export function createSidebar(
           await nativePicker.current?.pick(accept, trigger)
         })
       }
-      const input = (label: string): unknown =>
-        e(
-          'label',
-          null,
-          label,
-          e('input', {
-            autoFocus: true,
-            value: text,
-            required: true,
-            onChange: (event: { target: HTMLInputElement }) =>
-              setText(event.target.value),
-          }),
-        )
       if (dialog.type === 'create-space') {
         return e(
           Modal,
           {
             ...props,
             title: createdId.current ? '空间已创建' : '创建空间',
+            workspace: true,
             onSubmit: createSpace,
             submitDisabled: !createdId.current && !text.trim(),
             fieldsDisabled: !!createdId.current,
             cancelLabel: createdId.current ? '关闭' : '取消',
             submitLabel: createdId.current ? '进入工作区' : '创建空间',
           },
-          input('空间名称'),
+          e(WorkspaceFields.Name, { value: text, space: true, label: '空间名称', onChange: setText }),
           e(MemberEditor, { draft: members, setDraft: setMembers, onPick }),
-          e(
-            'small',
-            { className: 'dsh-space-muted' },
-            '创建固定工作目录。成员引用不会增加跨目录读写权限。',
-          ),
         )
       }
       if (dialog.type === 'add-directory') {
+        const changePath = (value: string): void => {
+          const name = (path: string): string => path.trim().split(/[\\/]/).filter(Boolean).at(-1) ?? ''
+          if (!text.trim() || text === name(directoryPath))
+            setText(name(value))
+          setDirectoryPath(value)
+        }
         return e(
           Modal,
           {
             ...props,
             title: '添加目录工作区',
-            submitDisabled: !text.trim(),
+            workspace: true,
+            submitDisabled: !text.trim() || !directoryPath.trim(),
+            cancelLabel: createdId.current ? '关闭' : '取消',
             submitLabel: '添加',
             onSubmit: () =>
               perform(
                 async () => {
-                  const workspace = await workspaces.create({
-                    path: text.trim(),
-                  })
-                  beginDraft(workspace.workspaceId)
+                  if (!createdId.current) {
+                    const before = await fetchRegistry()
+                    const workspace = await workspaces.create({ path: directoryPath.trim() })
+                    if (before.items.some(item => item.workspaceId === workspace.workspaceId))
+                      throw new Error('此目录已登记为工作区，请从现有条目进入或编辑')
+                    createdId.current = workspace.workspaceId
+                    workspaceEdit.current = createWorkspaceEdit({ ...workspace, kind: 'plain' }, { read: fetchRegistry, run: runOperation, rename: async (id, title) => {
+                      await workspaces.rename(id, title)
+                    }, accepted: refresh })
+                  }
+                  await workspaceEdit.current!.save({ title: text, space: enhance, ...members })
+                  await startCreated(createdId.current)
                 },
                 () => setDialog(null),
               ),
           },
-          e(
-            'label',
-            null,
-            '目录完整路径',
-            e(
-              'div',
-              { className: 'dsh-space-path-field' },
-              e('input', {
-                'aria-label': '目录完整路径',
-                'autoFocus': true,
-                'value': text,
-                'onChange': (event: { target: HTMLInputElement }) =>
-                  setText(event.target.value),
-              }),
-              e(IconButton, {
-                icon: 'folder',
-                label: '选择目录',
-                onClick: () => onPick(setText),
-              }),
-            ),
-          ),
+          e(WorkspaceFields.Name, { value: text, space: enhance, onChange: setText }),
+          e(WorkspaceFields.Path, { value: directoryPath, onChange: createdId.current ? undefined : changePath, onPick: () => onPick(changePath) }),
+          e(WorkspaceFields.SpaceToggle, { value: enhance, onChange: setEnhance }),
+          e('div', { hidden: !enhance }, e(MemberEditor, { draft: members, setDraft: setMembers, onPick })),
         )
       }
       if (dialog.type === 'rename') {
@@ -1518,13 +1487,19 @@ export function createSidebar(
           {
             ...props,
             title: '编辑工作区',
+            workspace: true,
+            explicitSubmit: item.kind === 'space' && !enhance,
             submitDisabled: !text.trim() || !registry,
             cancelLabel: saved ? '关闭' : '取消',
             secondary: e('button', {
               type: 'button',
               className: 'dsh-space-button danger',
               disabled: busy || !registry,
-              onClick: () => begin({ type: 'delete-workspace', item }),
+              onClick: () => {
+                setError(undefined)
+                descriptionRemoved.current = undefined
+                setDialog({ type: 'delete-workspace', item, returnToEditor: true })
+              },
             }, '移除工作区'),
             onSubmit: () =>
               perform(
@@ -1538,12 +1513,8 @@ export function createSidebar(
                 },
               ),
           },
-          e('label', null, '工作区名称', e('div', { className: 'dsh-space-workspace-name' }, e(Icon, { name: enhance ? 'layers' : 'folder' }), e('input', {
-            'aria-label': '工作区名称',
-            'value': text,
-            'onChange': (event: { target: HTMLInputElement }) => setText(event.target.value),
-          }))),
-          e('div', { className: 'dsh-space-workspace-path' }, e('span', null, '工作目录'), e('code', null, item.path)),
+          e(WorkspaceFields.Name, { value: text, space: enhance, onChange: setText }),
+          e(WorkspaceFields.Path, { value: item.path, onOpen: () => perform(() => workspaces.openPath(item.path)) }),
           error
             ? e(
                 'div',
@@ -1575,14 +1546,9 @@ export function createSidebar(
                 ),
               )
             : null,
-          item.kind === 'plain'
-            ? e('label', { className: 'dsh-space-enhance' }, e('input', { type: 'checkbox', checked: enhance, onChange: (event: { target: HTMLInputElement }) => {
-                setEnhance(event.target.checked)
-                if (!event.target.checked)
-                  setMembers({ members: [] })
-              } }), '增强为空间')
-            : null,
-          enhance ? e(MemberEditor, { key: workspaceEditKey.current, onPick, draft: members, setDraft: setMembers, original: item.members }) : null,
+          e(WorkspaceFields.SpaceToggle, { value: enhance, onChange: setEnhance }),
+          item.kind === 'space' && !enhance ? e('p', { className: 'dsh-space-change-warning', role: 'status' }, `保存后移除 ${item.members?.length ?? 0} 项成员配置。目录、已有链接和会话保留。`) : null,
+          e('div', { hidden: !enhance }, e(MemberEditor, { key: workspaceEditKey.current, onPick, draft: members, setDraft: setMembers })),
         )
       }
       if (dialog.type === 'invalid') {
@@ -1658,9 +1624,11 @@ export function createSidebar(
         Modal,
         {
           ...props,
-          title: deleting ? '移除工作区' : '移除附加描述',
+          title: deleting ? '移除工作区' : '转为普通工作区',
+          compact: true,
+          explicitSubmit: true,
           danger: deleting,
-          submitLabel: deleting ? '移除工作区' : '转为普通目录',
+          submitLabel: deleting ? '移除工作区' : '转为普通工作区',
           submitDisabled: !registry,
           onSubmit: () =>
             perform(
@@ -1681,6 +1649,7 @@ export function createSidebar(
                   await runOperation({
                     op: item.kind === 'space' ? 'drop-space' : 'drop-chat',
                     workspace: item.workspaceId,
+                    ...(item.kind === 'space' ? { expectedRevision: item.revision } : {}),
                   })
                   descriptionRemoved.current = item.workspaceId
                   refresh()
@@ -1704,14 +1673,13 @@ export function createSidebar(
               },
             ),
         },
-        e('strong', null, item.title),
-        e('small', { className: 'dsh-space-muted' }, item.path),
+        e('div', { className: 'dsh-space-removal-target' }, e(Icon, { name: 'folder' }), e('div', null, e('strong', null, item.title), e('small', null, item.path))),
         e(
           'p',
           null,
           deleting
-            ? '移除工作区登记与附加描述。目录、源文件和会话日志都会保留。'
-            : '只移除空间或独立对话描述。保留核心工作区、目录、会话与已有符号链接。',
+            ? '从列表移除工作区及其分组关系。文件和会话日志保留。'
+            : '不再作为快速对话专用工作区。工作目录和会话保留。',
         ),
       )
     }

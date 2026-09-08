@@ -25,7 +25,7 @@ export type SpaceOperation
     | { op: 'description', workspace: string, target: string, value: string }
     | { op: 'update-member', workspace: string, target: string, title: string, description: string }
     | { op: 'create-chat', name?: string, creationId?: string }
-    | { op: 'drop-space', workspace: string }
+    | { op: 'drop-space', workspace: string, expectedRevision?: string }
     | { op: 'drop-chat', workspace: string }
 
 export interface SpaceOperations {
@@ -149,7 +149,7 @@ class SpaceOperationsImpl implements SpaceOperations {
       case 'description': return this.memberDescription(current, operation)
       case 'update-member': return this.updateMemberDetails(current, operation)
       case 'create-chat': return this.createChat(current, operation.name, operation.creationId)
-      case 'drop-space': return this.drop(current, operation.workspace, 'space')
+      case 'drop-space': return this.drop(current, operation.workspace, 'space', operation.expectedRevision)
       case 'drop-chat': return this.drop(current, operation.workspace, 'chat')
     }
   }
@@ -233,20 +233,35 @@ class SpaceOperationsImpl implements SpaceOperations {
     const draft = await prepareMemberDraft(operation.members, operation.primary, space.members)
     const createdLinks: SpaceData['members'] = []
     const next = { workspaceId: space.workspaceId, ...draft }
+    const removedLinks: SpaceData['members'] = []
+    let saving = false
+    const sameLink = (a: SpaceData['members'][number], b: SpaceData['members'][number]): boolean => a.mode === 'link' && b.mode === 'link' && a.path === b.path && a.linkName === b.linkName
     try {
+      for (const member of space.members) {
+        if (member.mode === 'link' && !draft.members.some(next => sameLink(member, next)) && await removeMemberLink(core.path, member, true))
+          removedLinks.push(member)
+      }
       for (const member of draft.members) {
-        if (!space.members.some(old => old.path === member.path) && await ensureMemberLink(core.path, member))
+        if (!space.members.some(old => sameLink(old, member)) && await ensureMemberLink(core.path, member))
           createdLinks.push(member)
       }
+      saving = true
       await this.save({ ...clone(current), spaces: replaceSpace(current.spaces, next) })
     }
     catch (error) {
-      for (const member of createdLinks)
-        await removeMemberLink(core.path, member).catch(cleanupError => this.log(`[dsh-space] 清理未登记成员链接失败：${(cleanupError as Error).message}`))
-      throw error
+      const actual = this.store.read().spaces.find(row => row.workspaceId === space.workspaceId)
+      // 设置可能已落盘但响应失败，此时不能撤销已经提交的链接状态
+      if (!saving || !actual || spaceRevision(actual) !== spaceRevision(next)) {
+        const failures: string[] = []
+        for (const member of createdLinks)
+          await removeMemberLink(core.path, member, true).catch(cause => failures.push(String(cause)))
+        for (const member of removedLinks)
+          await ensureMemberLink(core.path, member).catch(cause => failures.push(String(cause)))
+        if (failures.length)
+          throw new Error(`${String(error)}；链接恢复未完成，请检查后重试：${failures.join('；')}`)
+        throw error
+      }
     }
-    for (const member of space.members.filter(old => !draft.members.some(member => member.path === old.path)))
-      await removeMemberLink(core.path, member).catch(error => this.log(`[dsh-space] 清理成员链接失败：${(error as Error).message}`))
     return { space: this.spaceView(core, next) }
   }
 
@@ -403,10 +418,12 @@ class SpaceOperationsImpl implements SpaceOperations {
     return { chat: this.chatView(core, chat) }
   }
 
-  private async drop(current: SpaceSettings, reference: string, kind: 'space' | 'chat'): Promise<Record<string, unknown>> {
+  private async drop(current: SpaceSettings, reference: string, kind: 'space' | 'chat', expectedRevision?: string): Promise<Record<string, unknown>> {
     const found = descriptionMatch(current, reference)
     if (found.kind !== kind)
       throw new Error(`「${reference}」不是${kind === 'space' ? '多项目' : '对话'}工作区描述`)
+    if (found.kind === 'space' && expectedRevision !== undefined && spaceRevision(found.value) !== expectedRevision)
+      throw new Error('成员已在其他位置修改，请重新载入后检查')
     const next = clone(current)
     if (kind === 'space')
       next.spaces = next.spaces.filter(space => space.workspaceId !== found.value.workspaceId)

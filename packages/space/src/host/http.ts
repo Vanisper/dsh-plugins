@@ -79,7 +79,7 @@ export function parseOperation(value: unknown): SpaceOperation {
     case 'description': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), value: optionalString(body.value, 'value') ?? '' }
     case 'update-member': return { op, workspace: requiredString(body, 'workspace'), target: requiredString(body, 'target'), title: optionalString(body.title, 'title') ?? '', description: optionalString(body.description, 'description') ?? '' }
     case 'create-chat': return { op, name: optionalString(body.name, 'name'), creationId: optionalString(body.creationId, 'creationId') }
-    case 'drop-space': return { op, workspace: requiredString(body, 'workspace') }
+    case 'drop-space': return { op, workspace: requiredString(body, 'workspace'), ...(body.expectedRevision !== undefined ? { expectedRevision: requiredString(body, 'expectedRevision') } : {}) }
     case 'drop-chat': return { op, workspace: requiredString(body, 'workspace') }
     default: throw new Error(`未知操作：${op}`)
   }

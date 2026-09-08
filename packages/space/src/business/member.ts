@@ -1,3 +1,4 @@
+import type { Stats } from 'node:fs'
 import type { MemberData, SpaceData } from './types.ts'
 import { lstat, mkdir, readlink, rm, symlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
@@ -63,6 +64,20 @@ function linkPath(workspacePath: string, member: MemberData): string | undefined
     : undefined
 }
 
+async function inspect(path: string): Promise<Stats | undefined> {
+  return lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT')
+      throw error
+    return undefined
+  })
+}
+
+async function checkLinkDirectory(path: string): Promise<void> {
+  const current = await inspect(path)
+  if (current && !current.isDirectory())
+    throw new MemberError(`链接目录必须是真实目录：${path}`)
+}
+
 /** 创建或确认一个由插件拥有的符号链接 */
 export async function ensureMemberLink(workspacePath: string, member: MemberData): Promise<boolean> {
   const target = linkPath(workspacePath, member)
@@ -71,8 +86,9 @@ export async function ensureMemberLink(workspacePath: string, member: MemberData
   const projectsPath = join(workspacePath, PROJECTS_DIR)
   if (!isUnder(target, projectsPath))
     throw new MemberError(`成员链接不能离开核心工作区目录：${target}`)
+  await checkLinkDirectory(projectsPath)
   await mkdir(projectsPath, { recursive: true })
-  const current = await lstat(target).catch(() => undefined)
+  const current = await inspect(target)
   if (current) {
     if (!current.isSymbolicLink())
       throw new MemberError(`链接位置已有非符号链接文件：${target}`)
@@ -86,27 +102,39 @@ export async function ensureMemberLink(workspacePath: string, member: MemberData
 }
 
 /** 仅删除与成员描述完全匹配的插件符号链接 */
-export async function removeMemberLink(workspacePath: string, member: MemberData): Promise<void> {
+export async function removeMemberLink(workspacePath: string, member: MemberData, strict = false): Promise<boolean> {
   const target = linkPath(workspacePath, member)
   if (!target)
-    return
+    return false
   const projectsPath = join(workspacePath, PROJECTS_DIR)
   if (!isUnder(target, projectsPath))
-    return
-  const current = await lstat(target).catch(() => undefined)
-  if (!current?.isSymbolicLink())
-    return
+    return false
+  await checkLinkDirectory(projectsPath)
+  const current = await inspect(target)
+  if (!current)
+    return false
+  if (!current.isSymbolicLink()) {
+    if (strict)
+      throw new MemberError(`链接位置已被其他文件占用：${target}`)
+    return false
+  }
   const memberPath = await canonicalize(member.path) ?? resolve(member.path)
   try {
     const raw = await readlink(target)
     const rawTarget = isAbsolute(raw) ? raw : resolve(dirname(target), raw)
     const targetPath = await canonicalize(rawTarget) ?? resolve(rawTarget)
-    if (targetPath === memberPath)
+    if (targetPath === memberPath) {
       await rm(target)
+      return true
+    }
+    if (strict)
+      throw new MemberError(`链接位置已指向其他目录：${target}`)
   }
-  catch {
-    // 链接可能已被并发删除
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw error
   }
+  return false
 }
 
 /** 计算供提示词和界面展示的动态链接路径 */

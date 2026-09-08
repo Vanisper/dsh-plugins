@@ -52,7 +52,7 @@ export function createWorkspaceEdit(item: RegistryItem, deps: Dependencies): Wor
       const title = draft.title.trim()
       if (!title)
         throw new Error('工作区名称不能为空')
-      if (base.kind === 'chat' || (!draft.space && (base.kind === 'space' || draft.members.length > 0)))
+      if (base.kind === 'chat')
         throw new Error('成员目录需要显式增强为空间')
       busy = true
       try {
@@ -64,7 +64,7 @@ export function createWorkspaceEdit(item: RegistryItem, deps: Dependencies): Wor
         }
         checkName()
         const configChanged = draft.space !== (base.kind === 'space') || (draft.space && membersKey(draft) !== membersKey(base))
-        const matches = (row: RegistryItem): boolean => row.kind === 'space' && membersKey(row) === membersKey(draft)
+        const matches = (row: RegistryItem): boolean => draft.space ? row.kind === 'space' && membersKey(row) === membersKey(draft) : row.kind === 'plain'
         if (configChanged && !matches(current)) {
           if (current.kind !== base.kind || current.revision !== base.revision)
             throw new Error('成员已在其他位置修改，请重新载入后检查')
@@ -72,17 +72,26 @@ export function createWorkspaceEdit(item: RegistryItem, deps: Dependencies): Wor
             throw new Error('空间版本不可用，请重新载入后检查')
           let updated: RegistryItem
           try {
-            const result = await deps.run({
-              op: current.kind === 'space' ? 'save-members' : 'enhance-space',
-              workspace: current.workspaceId,
-              members: draft.members,
-              primary: draft.primary,
-              ...(current.kind === 'space' ? { expectedRevision: current.revision } : {}),
-            })
-            const space = result.space as RegistryItem | undefined
-            if (!space?.revision || space.workspaceId !== base.workspaceId || space.path !== base.path || !Array.isArray(space.members))
-              throw new Error('成员保存响应不完整')
-            updated = { ...space, kind: 'space', title: base.title }
+            if (!draft.space) {
+              await deps.run({ op: 'drop-space', workspace: current.workspaceId, expectedRevision: current.revision })
+              updated = await read()
+              if (updated.kind !== 'plain')
+                throw new Error('空间化关闭结果未确认，请重试')
+              updated = { ...updated, title: base.title }
+            }
+            else {
+              const result = await deps.run({
+                op: current.kind === 'space' ? 'save-members' : 'enhance-space',
+                workspace: current.workspaceId,
+                members: draft.members,
+                primary: draft.primary,
+                ...(current.kind === 'space' ? { expectedRevision: current.revision } : {}),
+              })
+              const space = result.space as RegistryItem | undefined
+              if (!space?.revision || space.workspaceId !== base.workspaceId || space.path !== base.path || !Array.isArray(space.members))
+                throw new Error('成员保存响应不完整')
+              updated = { ...space, kind: 'space', title: base.title }
+            }
           }
           catch (cause) {
             // 响应丢失不等于写入失败；只接受与本次请求完全一致的读回结果

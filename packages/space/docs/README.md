@@ -17,3 +17,7 @@
 
 - [会话级多目录机制](research/multi-root-session-level.md)
 - [编辑器侧多根工作区](research/multi-root-editor-level.md)
+
+## 待实施方案
+
+- [工作区交互整理](workspace-interaction-refresh.md)：创建与编辑、链接和空间化切换、快速对话目录及拖拽反馈

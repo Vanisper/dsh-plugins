@@ -7,6 +7,10 @@ function setup(kind: 'space' | 'plain' = 'space') {
   const original = structuredClone(current)
   const read = vi.fn(async (): Promise<RegistryPayload> => ({ ok: true, root: '/root', items: [current], invalidChats: [], invalidSpaces: [] }))
   const run = vi.fn(async (input: Record<string, unknown>) => {
+    if (input.op === 'drop-space') {
+      current = { kind: 'plain', workspaceId: current.workspaceId, path: current.path, title: current.title, sessionIds: current.sessionIds }
+      return { dropped: current.workspaceId }
+    }
     current = { ...current, kind: 'space', members: structuredClone(input.members) as RegistryItem['members'], primary: input.primary as string | undefined, revision: 'v2' }
     return { space: structuredClone(current) }
   })
@@ -22,6 +26,16 @@ function setup(kind: 'space' | 'plain' = 'space') {
 }
 
 describe('工作区编辑分步保存', () => {
+  it('编辑内关闭空间化，保留草稿成员但只提交带版本的降级', async () => {
+    const h = setup()
+    h.rename.mockRejectedValueOnce(new Error('改名离线'))
+    await expect(h.edit.save({ ...h.draft, space: false })).rejects.toThrow('已完成的修改已保留')
+    expect(h.run).toHaveBeenCalledWith({ op: 'drop-space', workspace: 'w', expectedRevision: 'v1' })
+    expect(h.edit.snapshot().item.kind).toBe('plain')
+    await h.edit.save({ ...h.draft, space: false })
+    expect(h.run).toHaveBeenCalledOnce()
+    expect(h.current().title).toBe('新名称')
+  })
   it('成员先保存，随后改名；完整保留身份、路径和会话', async () => {
     const h = setup()
     await h.edit.save(h.draft)
@@ -108,10 +122,10 @@ describe('工作区编辑分步保存', () => {
     expect(h.rename).toHaveBeenCalledOnce()
   })
 
-  it('名称为空和未增强的成员输入不会执行任何写入', async () => {
+  it('名称为空拒绝保存，关闭空间时忽略保留在草稿中的成员输入', async () => {
     const h = setup('plain')
     await expect(h.edit.save({ ...h.draft, title: ' ' })).rejects.toThrow('不能为空')
-    await expect(h.edit.save({ ...h.draft, space: false })).rejects.toThrow('显式增强')
+    await h.edit.save({ ...h.draft, title: h.original.title, space: false })
     expect(h.run).not.toHaveBeenCalled()
     expect(h.rename).not.toHaveBeenCalled()
   })
